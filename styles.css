@@ -117,7 +117,7 @@ textarea#src:focus{outline:none;border-color:var(--ac);box-shadow:0 0 0 3px var(
 .warn:empty{display:none}
 .warn ul{margin:0;padding-left:18px}
 .okline{margin-top:10px;font-size:14px;color:var(--ok)}
-.prev-wrap{position:sticky;top:80px;display:grid;gap:12px}
+.prev-wrap{display:grid;gap:12px}
 .ai{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);margin-bottom:16px}
 .ai summary{cursor:pointer;list-style:none;padding:14px 16px;font-weight:700;display:flex;align-items:center;gap:10px}
 .ai summary::-webkit-details-marker{display:none}
@@ -176,3 +176,29 @@ textarea#src:focus{outline:none;border-color:var(--ac);box-shadow:0 0 0 3px var(
   .pn a{max-width:none}
   .tbl td:first-child{white-space:normal}
 }
+
+/* 樣式與播放設定 */
+.setp{padding:16px 16px 18px}
+.set-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.set-h h2{margin:0}
+.set-h .btn{margin-left:auto}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:0 -16px 12px;padding:0 12px;overflow-x:auto}
+.tabs button{border:0;background:none;padding:8px 12px;font-weight:500;color:var(--mute);border-bottom:3px solid transparent;margin-bottom:-1px;cursor:pointer;white-space:nowrap}
+.tabs button[aria-selected=true]{color:var(--ink);border-bottom-color:var(--ac)}
+.tabp{display:grid;gap:12px}
+.tabp[hidden]{display:none}
+.orow{display:grid;grid-template-columns:84px 1fr;gap:10px;align-items:start}
+.ol{font-size:14px;color:var(--mute);padding-top:6px}
+.ochips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.och{border:1px solid var(--line);background:var(--panel);border-radius:9px;padding:5px 11px;font-size:14px;cursor:pointer;display:inline-flex;align-items:center;gap:7px}
+.och:hover{border-color:#CFC7B9}
+.och[aria-pressed=true]{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink);font-weight:700}
+.osw{display:inline-flex}
+.osw i{width:12px;height:12px;border-radius:50%;margin-left:-3px;box-shadow:0 0 0 1.5px var(--panel),0 0 0 2px rgba(0,0,0,.08)}
+.osw i:first-child{margin-left:0}
+.otext{border:1px solid var(--line);border-radius:9px;padding:7px 11px;background:#FDFCFA}
+input[type=color]{width:44px;height:32px;border:1px solid var(--line);border-radius:8px;padding:2px;background:var(--panel);cursor:pointer}
+.ck{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:15px;cursor:pointer}
+.ck input{width:18px;height:18px;accent-color:var(--ac)}
+.ck small{flex-basis:100%;padding-left:26px;color:var(--mute);font-size:13px;margin-top:-4px}
+@media (max-width:640px){.orow{grid-template-columns:1fr;gap:4px}.ol{padding-top:0}}

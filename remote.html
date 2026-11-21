@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#16171B">
+<title>簡報遙控器</title>
+<style>
+:root{--bg:#16171B;--panel:#212228;--line:#2E3038;--ink:#F1F1F4;--mute:#9A9BA4;--ac:#E8794A;--ok:#4CC38A;--bad:#E5675F;color-scheme:dark}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font:16px/1.6 system-ui,-apple-system,'PingFang TC','Noto Sans TC',sans-serif;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none}
+.app{min-height:100%;display:flex;flex-direction:column;gap:12px;padding:calc(14px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom));max-width:560px;margin:0 auto}
+header{display:flex;align-items:center;gap:10px;padding-right:36px}
+header h1{font-size:17px;font-weight:700}
+.st{margin-left:auto;font-size:13px;display:flex;align-items:center;gap:6px;color:var(--mute)}
+.st i{width:9px;height:9px;border-radius:50%;background:var(--mute)}
+.st.ok i{background:var(--ok)}.st.bad i{background:var(--bad)}
+.now{background:var(--panel);border-radius:14px;padding:14px 16px}
+.now .pg{font-size:13px;color:var(--mute);display:flex;justify-content:space-between}
+.now .tt{font-size:20px;font-weight:700;line-height:1.4;margin-top:2px}
+.now .nx{font-size:14px;color:var(--mute);margin-top:6px}
+.notes{flex:1;min-height:120px;background:var(--panel);border-radius:14px;padding:14px 16px;font-size:19px;line-height:1.75;white-space:pre-line;overflow:auto;-webkit-user-select:text;user-select:text}
+.notes.empty{color:var(--mute);font-size:15px}
+.lab{font-size:12px;color:var(--mute);letter-spacing:.1em;margin-bottom:4px}
+.btns{display:grid;grid-template-columns:1fr 2fr;gap:10px}
+button{font:inherit;color:inherit;border:0;border-radius:16px;background:var(--panel);cursor:pointer;touch-action:manipulation}
+button:active{transform:scale(.98);filter:brightness(1.2)}
+.prev{height:110px;font-size:18px}
+.next{height:110px;font-size:22px;font-weight:700;background:var(--ac);color:#fff}
+.row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+.row button{height:48px;font-size:15px}
+.timer{font-variant-numeric:tabular-nums}
+.list{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:flex-end;z-index:5}
+.list.on{display:flex}
+.sheet{background:#1C1D22;width:100%;max-height:75%;overflow:auto;border-radius:18px 18px 0 0;padding:14px 12px calc(14px + env(safe-area-inset-bottom))}
+.sheet h2{font-size:15px;color:var(--mute);margin:4px 8px 8px;font-weight:600}
+.sheet button{display:flex;gap:12px;width:100%;text-align:left;padding:12px;border-radius:10px;background:none;font-size:16px}
+.sheet button.cur{background:var(--panel)}
+.sheet i{font-style:normal;color:var(--mute);min-width:24px}
+.intro{margin:auto 0;text-align:center;color:var(--mute);line-height:1.8;padding:20px}
+.intro b{color:var(--ink);display:block;font-size:20px;margin-bottom:8px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="app">
+  <header><h1>簡報遙控器</h1><span class="st" id="st"><i></i><span>連線中…</span></span></header>
+  <div class="intro" id="intro" hidden>
+    <b>請掃描簡報上的 QR code</b>
+    在電腦上播放簡報，按右下角的「手機遙控」按鈕（或按 R 鍵），再用手機相機掃描畫面上的 QR code，就會打開這個遙控器。
+  </div>
+  <div id="main" hidden style="display:contents">
+    <section class="now"><div class="pg"><span id="pg">– / –</span><span class="timer" id="timer">00:00</span></div><div class="tt" id="tt"></div><div class="nx" id="nx"></div></section>
+    <div><div class="lab">講稿</div></div>
+    <div class="notes empty" id="notes">連上之後，這裡會顯示每一頁的講稿</div>
+    <div class="btns"><button class="prev" id="prev">上一步</button><button class="next" id="next">下一步</button></div>
+    <div class="row"><button id="toc">目錄</button><button id="black">黑畫面</button><button id="reset">計時歸零</button></div>
+  </div>
+</div>
+<div class="list" id="list"><div class="sheet"><h2>跳到哪一頁</h2><div id="items"></div></div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
+<script>
+(function () {
+  var $ = function (s) { return document.getElementById(s); };
+  var id = decodeURIComponent((location.hash || '').slice(1));
+  var st = $('st'), conn = null, peer = null, state = null, t0 = Date.now(), retry = 0;
+  function status(t, cls) { st.className = 'st ' + (cls || ''); st.lastChild.textContent = t; }
+  if (!/^wst-[a-z0-9]+$/.test(id)) { $('intro').hidden = false; status('沒有連線'); return; }
+  $('main').hidden = false;
+  function send(m) { if (conn && conn.open) { conn.send(m); if (navigator.vibrate) navigator.vibrate(12); } else status('還沒連上，稍等一下', 'bad'); }
+  function draw() {
+    if (!state) return;
+    $('pg').textContent = (state.i + 1) + ' / ' + state.N + (state.nf ? '　重點 ' + state.f + '/' + state.nf : '');
+    $('tt').textContent = state.title || '';
+    var more = state.nf && state.f < state.nf;
+    $('nx').textContent = more ? '下一步：顯示下一個重點' : (state.next ? '下一頁：' + state.next : '這是最後一頁');
+    var n = $('notes'); n.textContent = state.note || '這一頁沒有講稿'; n.classList.toggle('empty', !state.note);
+  }
+  function connect() {
+    if (!window.Peer) { status('載入失敗，請檢查網路', 'bad'); return; }
+    if (!peer || peer.destroyed) peer = new Peer();
+    var go = function () {
+      conn = peer.connect(id, { reliable: true });
+      conn.on('open', function () { retry = 0; status('已連線', 'ok'); conn.send({ t: 'hi' }); });
+      conn.on('data', function (d) { if (d && d.t === 'state') { state = d; draw(); } });
+      conn.on('close', function () { status('中斷了，重新連線中…', 'bad'); setTimeout(connect, 1500); });
+    };
+    if (peer.open) go(); else peer.once('open', go);
+    peer.on('error', function (e) {
+      status(e && e.type === 'peer-unavailable' ? '找不到簡報，請重新掃描 QR code' : '連線出問題，重試中…', 'bad');
+      if (++retry < 6) setTimeout(connect, 2500);
+    });
+  }
+  connect();
+  $('next').onclick = function () { send({ t: 'next' }); };
+  $('prev').onclick = function () { send({ t: 'prev' }); };
+  $('black').onclick = function () { send({ t: 'black' }); };
+  $('reset').onclick = function () { t0 = Date.now(); };
+  $('toc').onclick = function () {
+    if (!state) return;
+    $('items').innerHTML = '';
+    (state.list || []).forEach(function (t, j) {
+      var b = document.createElement('button'); if (j === state.i) b.className = 'cur';
+      b.innerHTML = '<i>' + (j + 1) + '</i><span></span>'; b.lastChild.textContent = t;
+      b.onclick = function () { send({ t: 'go', i: j }); $('list').classList.remove('on'); };
+      $('items').appendChild(b);
+    });
+    $('list').classList.add('on');
+  };
+  $('list').onclick = function (e) { if (e.target === this) this.classList.remove('on'); };
+  setInterval(function () { var s = Math.floor((Date.now() - t0) / 1000); $('timer').textContent = String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); }, 500);
+  try { if (navigator.wakeLock) navigator.wakeLock.request('screen').catch(function () {}); } catch (e) {}
+})();
+</script>
+<script src="https://mattsue1003.github.io/oth-report-button/report.js" data-site="網頁簡報範本庫（遙控器）" defer></script>
+<script>
+window.addEventListener('load',function(){
+  (function shrink(n){
+    var host=document.querySelector('[data-oth-report]');
+    if(!host||!host.shadowRoot){if(n<20)setTimeout(function(){shrink(n+1)},300);return}
+    var s=document.createElement('style');
+    s.textContent='.fab{left:auto!important;right:12px!important;top:12px!important;bottom:auto!important;width:30px!important;height:30px!important;min-width:0!important;padding:0!important;gap:0!important;justify-content:center!important;border-radius:50%!important;overflow:hidden!important;font-size:0!important;white-space:nowrap!important;opacity:.5}.fab svg{width:14px!important;height:14px!important;flex:none;margin:0!important}';
+    host.shadowRoot.appendChild(s);
+  })(0);
+});
+</script>
+</body>
+</html>

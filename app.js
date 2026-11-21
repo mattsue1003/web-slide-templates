@@ -35,8 +35,10 @@
   }
   const safeName = s => (String(s || '網頁簡報').replace(/[\\/:*?"<>|\n\r]+/g, ' ').trim().slice(0, 60) || '網頁簡報');
   function blobOf(html) { return new Blob([html], { type: 'text/html;charset=utf-8' }); }
-  function download(theme, src) {
-    const html = E.build(theme, src);
+  const REMOTE = new URL('remote.html', location.href.split('#')[0]).href;
+  const deckOpt = cfg => ({ cfg: cfg || {}, remoteUrl: REMOTE });
+  function download(theme, src, cfg) {
+    const html = E.build(theme, src, deckOpt(cfg));
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blobOf(html));
     a.download = safeName(E.titleOf(E.parse(src), theme.name)) + '.html';
@@ -44,8 +46,8 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
     toast('已下載 HTML 檔，用瀏覽器打開就能播放');
   }
-  function openDeck(theme, src, hash) {
-    const url = URL.createObjectURL(blobOf(E.build(theme, src)));
+  function openDeck(theme, src, hash, cfg) {
+    const url = URL.createObjectURL(blobOf(E.build(theme, src, deckOpt(cfg))));
     const w = window.open(url + (hash || ''), '_blank');
     if (!w) toast('瀏覽器擋住了新分頁。請允許這個網站開新視窗，或改用「下載 HTML」', 4200);
     else if (hash === '#print') toast('新分頁會跳出列印視窗，目的地選「儲存為 PDF」', 4200);
@@ -166,6 +168,7 @@
         <button class="btn" id="tPdf">${ICON.pdf}存成 PDF</button>
       </div>
     </div>
+    <p class="hint" style="margin:-6px 0 4px">進到編輯器後，還可以換字體、配色、排版、轉場動畫，以及上下或左右捲動的播放方式。</p>
     <div class="meta-l">配色</div>
     <div class="pal">${swatches(t).map(c => `<i style="background:${c}" title="${c}"></i>`).join('')}</div>
     <div class="meta-l">字型</div>
@@ -222,7 +225,7 @@
       '- 「引言」版面：「> 引言內容」，下一行「— 出處」。不要編造名人名言。',
       '- 「圖文」版面：「![圖片說明](圖片網址)」，沒有網址就寫「![圖片說明]()」，我之後再放圖。',
       '- 「問答」版面：「# 題目」，選項用「- [x] 正確答案」和「- [ ] 錯誤選項」，最後一行「解答：說明」。如果是投票、沒有標準答案，全部用「- [ ]」。',
-      '- 給講者看的提醒寫「備註：…」，播放時按 N 才會出現。',
+      o.notes ? '- 每一頁都加一行「備註：…」，寫講者在這一頁要說的話（2～3 句口語、像在跟台下聊天）。這是講稿，播放時只有講者看得到。' : '- 給講者看的提醒寫「備註：…」，播放時只有講者看得到。',
       '- 不要用表格、不要用其他 Markdown 語法，程式碼區塊外面不要放簡報內容。',
       '',
       '格式範例：',
@@ -241,10 +244,66 @@
       '- [x] 25 分鐘',
       '- [ ] 60 分鐘',
       '解答：專注 25 分鐘、休息 5 分鐘。',
+      o.notes ? '備註：先請大家猜猜看，再公布答案。' : '',
       '=== 結尾',
       '# 謝謝聆聽',
     ];
     return lines.filter((l, k) => l !== '' || lines[k - 1] !== '').join('\n');
+  }
+
+  /* 樣式與播放設定面板 */
+  let chipFonts = false;
+  function loadChipFonts() {
+    if (chipFonts) return; chipFonts = true;
+    const txt = E.OPTS.find(o => o.key === 'font').items.map(i => i.n).join('');
+    const l = document.createElement('link'); l.rel = 'stylesheet';
+    l.href = 'https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@900&family=Huninn&family=LXGW+WenKai+TC:wght@700&family=Iansui&display=swap&text=' + encodeURIComponent(txt);
+    document.head.appendChild(l);
+  }
+  const TABS = [...new Set(E.OPTS.map(o => o.tab))];
+  function optHtml(o, cfg, theme) {
+    if (o.type === 'check') {
+      const v = cfg[o.key] == null ? !!o.def : cfg[o.key];
+      return `<label class="ck"><input type="checkbox" data-k="${o.key}"${v ? ' checked' : ''}> ${o.n}${o.tip ? `<small>${o.tip}</small>` : ''}</label>`;
+    }
+    if (o.type === 'color') {
+      const base = /^#[0-9a-f]{6}$/i.test(theme.vars.ac) ? theme.vars.ac : '#C95F33';
+      return `<div class="orow"><span class="ol">${o.n}</span><div class="ochips"><input type="color" data-k="${o.key}" value="${cfg.accent || base}" aria-label="自訂主色"><button type="button" class="och" data-clear="accent" aria-pressed="${!cfg.accent}">不用自訂</button></div></div>`;
+    }
+    if (o.type === 'text') return `<label class="orow"><span class="ol">${o.n}</span><input type="text" class="otext" data-k="${o.key}" maxlength="40" value="${esc(cfg[o.key] || '')}" placeholder="${esc(o.ph || '')}"></label>`;
+    return `<div class="orow"><span class="ol">${o.n}</span><div class="ochips">${o.items.map(it => `<button type="button" class="och" data-k="${o.key}" data-v="${it.v}" aria-pressed="${(cfg[o.key] || '') === it.v}"${it.ff ? ` style="font-family:${esc(it.ff)}"` : ''}>${it.sw ? `<span class="osw">${it.sw.map(c => `<i style="background:${c}"></i>`).join('')}</span>` : ''}${esc(it.n)}</button>`).join('')}</div></div>`;
+  }
+  function setPanel(cfg, theme) {
+    loadChipFonts();
+    return `<section class="pane setp" id="setp" aria-label="樣式與播放設定">
+  <div class="set-h"><h2>樣式與播放 <small>換範本時這些設定會保留</small></h2><button type="button" class="btn sm ghost" id="sReset">${ICON.reset}恢復範本預設</button></div>
+  <div class="tabs" role="tablist">${TABS.map((t, k) => `<button type="button" role="tab" data-tab="${t}" aria-selected="${k === 0}">${t}</button>`).join('')}</div>
+  ${TABS.map((t, k) => `<div class="tabp" role="tabpanel" data-tab="${t}"${k ? ' hidden' : ''}>${E.OPTS.filter(o => o.tab === t).map(o => optHtml(o, cfg, theme)).join('')}${t === '播放' ? '<p class="hint">講者模式：播放時按右下角的講台圖示（或 P 鍵），另開一個有講稿、下一頁和計時的視窗。手機遙控：按手機圖示（或 R 鍵），用手機掃 QR code。</p>' : ''}</div>`).join('')}
+</section>`;
+  }
+  function bindSet(box, get, set, getTheme) {
+    let tt = 0;
+    const redraw = () => { const c = get(); $$('.och[data-k]', box).forEach(b => b.setAttribute('aria-pressed', (c[b.dataset.k] || '') === b.dataset.v)); const cl = $('[data-clear=accent]', box); if (cl) cl.setAttribute('aria-pressed', !c.accent); };
+    box.addEventListener('click', e => {
+      const tab = e.target.closest('[role=tab]');
+      if (tab) { $$('[role=tab]', box).forEach(x => x.setAttribute('aria-selected', x === tab)); $$('.tabp', box).forEach(p => { p.hidden = p.dataset.tab !== tab.dataset.tab; }); return; }
+      const b = e.target.closest('.och'); if (!b) return;
+      const c = Object.assign({}, get());
+      if (b.dataset.clear) delete c[b.dataset.clear]; else if (b.dataset.v) c[b.dataset.k] = b.dataset.v; else delete c[b.dataset.k];
+      set(c); redraw();
+    });
+    box.addEventListener('change', e => { const x = e.target; if (x.type === 'checkbox' && x.dataset.k) { const c = Object.assign({}, get()); c[x.dataset.k] = x.checked; set(c); } });
+    box.addEventListener('input', e => {
+      const x = e.target; if (!x.dataset.k || x.type === 'checkbox') return;
+      clearTimeout(tt); tt = setTimeout(() => { const c = Object.assign({}, get()); if (x.value.trim()) c[x.dataset.k] = x.value; else delete c[x.dataset.k]; set(c); redraw(); }, x.type === 'color' ? 120 : 400);
+    });
+    $('#sReset', box).onclick = () => {
+      set({});
+      const tmp = document.createElement('div'); tmp.innerHTML = setPanel({}, getTheme());
+      box.replaceWith(tmp.firstElementChild);
+      bindSet($('#setp'), get, set, getTheme);
+      toast('已恢復範本預設的樣式');
+    };
   }
 
   function viewEdit(want) {
@@ -261,9 +320,11 @@
       else note = `沿用你上次寫的內容，換成「${want.name}」的樣子。想重來可以按「換回範例內容」。`;
       d.theme = want.id;
     }
+    let cfg = E.cleanCfg(d.cfg);
+    d.cfg = cfg;
     store.set('wst-draft', d);
     let theme = byId(d.theme);
-    const ai = Object.assign({ topic: '', aud: '', pages: '10', min: '', must: '' }, store.get('wst-ai', isAi) || {});
+    const ai = Object.assign({ topic: '', aud: '', pages: '10', min: '', must: '', notes: true }, store.get('wst-ai', isAi) || {});
     const groups = TAGS.map(tag => `<optgroup label="${tag}">${THEMES.filter(t => t.tags[0] === tag).map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</optgroup>`).join('');
 
     view.innerHTML = `
@@ -289,6 +350,7 @@
           <label class="fld">頁數<select id="aPages">${[6, 8, 10, 12, 15].map(n => `<option${String(n) === String(ai.pages) ? ' selected' : ''}>${n}</option>`).join('')}</select></label>
           <label class="fld">報告時間（分鐘）<input id="aMin" inputmode="numeric" value="${esc(ai.min)}" placeholder="可以不填"></label>
         </div>
+        <label class="ck"><input type="checkbox" id="aNotes"${ai.notes !== false ? ' checked' : ''}> 也請 AI 寫每一頁的講稿 <small>講者模式和手機遙控上看得到，台下看不到</small></label>
         <div class="acts">
           <button class="btn pri" id="aGPT">${ICON.copy}複製並打開 ChatGPT</button>
           <button class="btn" id="aGem">${ICON.copy}複製並打開 Gemini</button>
@@ -313,7 +375,8 @@
       <button class="btn sm" id="pNext" aria-label="下一頁">›</button>
       <span style="margin-left:auto">游標在哪一頁，預覽就跳到哪一頁</span>
     </div>
-    <p class="hint">格式不熟？看 <a href="#guide">使用說明</a>。內容會自動存在這台電腦的瀏覽器裡。</p>
+    <p class="hint">格式不熟？看 <a href="#guide">使用說明</a>。內容和設定會自動存在這台電腦的瀏覽器裡。</p>
+    ${setPanel(cfg, theme)}
   </div>
 </div>`;
     const ta = $('#src'), prev = $('#prev'), sel = $('#eTheme');
@@ -332,14 +395,15 @@
       $('#eWarn').innerHTML = w.length ? `<ul>${w.slice(0, 6).map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
       $('#eOk').textContent = !w.length && sl.length ? `共 ${sl.length} 頁，格式都正確` : '';
     };
-    const full = () => { ready = false; prev.srcdoc = E.build(theme, ta.value, { start: at }); };
+    const full = () => { ready = false; prev.srcdoc = E.build(theme, ta.value, Object.assign(deckOpt(cfg), { start: at })); };
     const swap = () => {
       const sl = E.parse(ta.value);
       if (!ready || !sl.length) return full();
-      send(prev, { swap: E.cells(sl), at });
+      send(prev, { swap: E.cells(sl, cfg), at });
     };
     hookFrame(prev, m => { if (typeof m.slide === 'number') { ready = true; $('#pPg').textContent = `${m.slide + 1} / ${m.total}`; } });
-    const save = () => store.set('wst-draft', { theme: theme.id, src: ta.value });
+    const save = () => store.set('wst-draft', { theme: theme.id, src: ta.value, cfg });
+    bindSet($('#setp'), () => cfg, v => { cfg = E.cleanCfg(v); save(); full(); }, () => theme);
     ta.addEventListener('input', () => { save(); clearTimeout(t1); t1 = setTimeout(() => { at = slideAt(); swap(); check(); }, 350); });
     const follow = () => { const k = slideAt(); if (k !== at) { at = k; send(prev, { go: k }); } };
     ta.addEventListener('click', follow); ta.addEventListener('keyup', e => { if (/Arrow|Page|Home|End/.test(e.key)) follow(); });
@@ -379,13 +443,13 @@
     };
     $('#pPrev').onclick = () => send(prev, { key: 'ArrowLeft' });
     $('#pNext').onclick = () => send(prev, { key: 'ArrowRight' });
-    $('#ePlay').onclick = () => openDeck(theme, ta.value);
-    $('#eDl').onclick = () => download(theme, ta.value);
-    $('#ePdf').onclick = () => openDeck(theme, ta.value, '#print');
+    $('#ePlay').onclick = () => openDeck(theme, ta.value, '', cfg);
+    $('#eDl').onclick = () => download(theme, ta.value, cfg);
+    $('#ePdf').onclick = () => openDeck(theme, ta.value, '#print', cfg);
 
     // AI 小幫手
-    const aiVals = () => ({ topic: $('#aTopic').value, aud: $('#aAud').value, pages: $('#aPages').value, min: $('#aMin').value.replace(/\D/g, ''), must: $('#aMust').value });
-    ['aTopic', 'aAud', 'aPages', 'aMin', 'aMust'].forEach(id => $('#' + id).addEventListener('input', () => store.set('wst-ai', aiVals())));
+    const aiVals = () => ({ topic: $('#aTopic').value, aud: $('#aAud').value, pages: $('#aPages').value, min: $('#aMin').value.replace(/\D/g, ''), must: $('#aMust').value, notes: $('#aNotes').checked });
+    ['aTopic', 'aAud', 'aPages', 'aMin', 'aMust', 'aNotes'].forEach(id => { const x = $('#' + id); x.addEventListener('input', () => store.set('wst-ai', aiVals())); x.addEventListener('change', () => store.set('wst-ai', aiVals())); });
     const goAI = url => {
       const o = aiVals();
       if (!o.topic.trim()) { toast('先寫上簡報主題'); $('#aTopic').focus(); return; }
@@ -427,7 +491,23 @@
     <thead><tr><th>版面</th><th>適合用在</th><th>怎麼寫</th></tr></thead>
     <tbody>${E.TYPES.map(t => `<tr><td>${t.n}</td><td>${esc(t.tip)}</td><td><pre>${esc(ex[t.k])}</pre></td></tr>`).join('')}</tbody>
   </table>
-  <p class="hint" style="margin-top:10px">每一頁都可以加一行「備註：要提醒自己的話」，播放時按 N 才看得到，台下看不到。</p>
+  <p class="hint" style="margin-top:10px">每一頁都可以加一行「備註：要說的話」，這就是講稿，只有講者模式、手機遙控和按 N 時看得到。</p>
+  <h2>樣式可以自己調</h2>
+  <p style="color:var(--mute);margin:0 0 12px">在編輯器右邊的「樣式與播放」，選了馬上就能在預覽看到。換範本時，這些設定會保留。</p>
+  <table class="tbl">
+    <tbody>${[...new Set(E.OPTS.map(o => o.tab))].map(t => `<tr><td>${t}</td><td>${E.OPTS.filter(o => o.tab === t).map(o => esc(o.n) + (o.items ? '：' + o.items.map(i => esc(i.n)).join('、') : '')).join('<br>')}</td></tr>`).join('')}</tbody>
+  </table>
+  <h2>三種播放方式</h2>
+  <div class="gsteps">
+    <div><b>一頁一頁</b>像投影片一樣，一次一頁，按鍵或點畫面換頁。可以搭配「按一下才出現下一個重點」。</div>
+    <div><b>上下捲動</b>所有頁面由上往下排，用滑鼠滾輪或手指往上滑，像看網頁一樣。</div>
+    <div><b>左右滑動</b>所有頁面排成一排，手機、平板左右滑最順手。</div>
+  </div>
+  <p class="hint" style="margin-top:10px">捲動的兩種方式，預設會「一頁一頁對齊」。在設定裡關掉，就能自由、流暢地捲動。</p>
+  <h2>講者模式（講稿提示）</h2>
+  <p>在內容的每一頁加一行 <code>備註：這一頁要說的話</code>。播放時按 <span class="kbd">P</span>，或右下角的講台圖示，會另開一個「講者視窗」。視窗裡有<strong>講稿、下一頁預覽、計時器、時鐘</strong>，在講者視窗按下一步，投影的畫面也會跟著換頁。把講者視窗留在你的筆電，投影的視窗拖到投影機或延伸螢幕上就可以了。</p>
+  <h2>用手機遙控</h2>
+  <p>播放時按 <span class="kbd">R</span>，或右下角的手機圖示，畫面會出現 QR code。用手機相機掃描，就能用手機<strong>換頁、看講稿、看下一頁是什麼、跳到任何一頁、讓畫面變黑</strong>，可以不用站在電腦旁邊。電腦和手機都要連上網路，不需要安裝 App。</p>
   <h2>播放時的按鍵</h2>
   <table class="tbl">
     <tbody>
@@ -435,7 +515,11 @@
       <tr><td><span class="kbd">←</span> 或點畫面左邊</td><td>上一頁</td></tr>
       <tr><td><span class="kbd">F</span></td><td>全螢幕／離開全螢幕</td></tr>
       <tr><td><span class="kbd">O</span></td><td>看全部頁面，點一頁就跳過去</td></tr>
-      <tr><td><span class="kbd">N</span></td><td>顯示／隱藏講者備註</td></tr>
+      <tr><td><span class="kbd">N</span></td><td>在畫面下方顯示／隱藏講稿（自己練習時用）</td></tr>
+      <tr><td><span class="kbd">T</span></td><td>打開目錄，點一頁就跳過去</td></tr>
+      <tr><td><span class="kbd">P</span></td><td>講者模式：講稿、下一頁、計時</td></tr>
+      <tr><td><span class="kbd">R</span></td><td>手機遙控：出現 QR code 給手機掃</td></tr>
+      <tr><td><span class="kbd">B</span></td><td>畫面變黑／恢復（想讓大家看你的時候）</td></tr>
       <tr><td>手機、平板</td><td>左右滑動換頁</td></tr>
     </tbody>
   </table>
