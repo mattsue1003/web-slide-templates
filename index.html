@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>網頁簡報範本庫</title>
+<meta name="description" content="18 套完整的網頁簡報範本，每套 11 種版面。用簡單的文字寫內容，換範本不用重打，可以直接播放、下載成 HTML 或存成 PDF。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap">
+<link rel="stylesheet" href="styles.css?v=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='6' width='28' height='18' rx='4' fill='%23C95F33'/%3E%3Crect x='7' y='11' width='12' height='3' rx='1.5' fill='%23fff'/%3E%3Crect x='7' y='16' width='8' height='3' rx='1.5' fill='%23fff' opacity='.7'/%3E%3Crect x='14' y='25' width='4' height='4' fill='%23C95F33'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="top">
+  <a class="logo" href="#/" aria-label="網頁簡報範本庫首頁">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="2" y="6" width="28" height="18" rx="4"/><rect x="7" y="11" width="12" height="3" rx="1.5" class="w"/><rect x="7" y="16" width="8" height="3" rx="1.5" class="w o"/><rect x="14" y="25" width="4" height="4"/></svg>
+    <span>網頁簡報範本庫</span>
+  </a>
+  <nav class="nav" aria-label="主要頁面">
+    <a href="#/" data-r="gallery">範本</a>
+    <a href="#edit" data-r="edit">編輯器</a>
+    <a href="#guide" data-r="guide">使用說明</a>
+  </nav>
+  <a class="sister" href="https://mattsue1003.github.io/slide-asset-library/" target="_blank" rel="noopener">簡報素材庫 ↗</a>
+</header>
+<main id="view" tabindex="-1"></main>
+<div id="toast" role="status" aria-live="polite"></div>
+<footer class="foot">網頁簡報範本庫 · 內容只存在你自己的瀏覽器裡，不會上傳</footer>
+<script src="engine.js?v=1"></script>
+<script src="themes.js?v=1"></script>
+<script src="app.js?v=1"></script>
+<script src="https://mattsue1003.github.io/oth-report-button/report.js" data-site="網頁簡報範本庫" defer></script>
+<script>
+window.addEventListener('load',function(){
+  (function shrink(n){
+    var host=document.querySelector('[data-oth-report]');
+    if(!host||!host.shadowRoot){if(n<20)setTimeout(function(){shrink(n+1)},300);return}
+    var s=document.createElement('style');
+    s.textContent='.fab{left:14px!important;right:auto!important;bottom:14px!important;width:34px!important;height:34px!important;min-width:0!important;padding:0!important;gap:0!important;justify-content:center!important;border-radius:50%!important;overflow:hidden!important;font-size:0!important;white-space:nowrap!important;opacity:.75}.fab svg{width:16px!important;height:16px!important;flex:none;margin:0!important}@media (hover:hover){.fab:hover{width:auto!important;padding:0 14px!important;gap:6px!important;font-size:13px!important;border-radius:99px!important;opacity:1}}';
+    host.shadowRoot.appendChild(s);
+  })(0);
+});
+</script>
+</body>
+</html>
