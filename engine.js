@@ -49,8 +49,8 @@
 
   function toSlide(b) {
     const s = { type: b.type, raw: b.raw, unknown: b.unknown, missing: b.missing, noHead: b.noHead, line: b.line,
-      title: '', sub: '', items: [], paras: [], cols: [], quote: [], by: '', img: null, note: [], answer: '' };
-    let col = null;
+      title: '', sub: '', items: [], paras: [], cols: [], quote: [], by: '', img: null, note: [], answer: '', refs: [] };
+    let col = null, inRefs = false;
     for (const raw of b.lines) {
       const t = raw.trim();
       if (!t) continue;
@@ -63,6 +63,8 @@
       }
       if ((m = t.match(/^!\[(.*?)\]\((.*?)\)/))) { s.img = { alt: m[1], src: m[2].trim() }; continue; }
       if ((m = t.match(/^(?:備註|講者備註|note)\s*[：:]\s*(.*)$/i))) { s.note.push(m[1]); continue; }
+      if (/^(?:資料來源|參考資料|參考文獻|文獻來源|references?|sources?)\s*[：:]/i.test(t) || /^(?:資料來源|參考資料|參考文獻)\s*$/.test(t)) { inRefs = true; s.refs.push(t); continue; }
+      if (inRefs && !/^#/.test(t)) { s.refs.push(t.replace(/^(?:[-*•・]|\d+[.、)）])\s+/, '')); continue; }
       if (s.type === 'quiz' && (m = t.match(/^(?:解答|答案|說明)\s*[：:]\s*(.*)$/))) { s.answer = m[1]; continue; }
       if ((m = t.match(/^>\s?(.*)$/))) { s.quote.push(m[1]); continue; }
       if ((m = t.match(/^(?:—|──|--|－－|——)\s*(.*)$/))) { s.by = m[1]; continue; }
@@ -72,6 +74,7 @@
       }
       if (col) col.items.push(t); else s.paras.push(t);
     }
+    if (s.img && s.type === 'bullets') s.type = 'image';   // 重點頁放了圖片：用圖文版面
     // 左右版面沒有寫 ## 欄位標題：把重點平分到兩欄
     if (s.type === 'two' && !s.cols.length && s.items.length) {
       const h = Math.ceil(s.items.length / 2);
@@ -154,10 +157,10 @@
       }
       case 'image': {
         const im = s.img || { alt: '', src: '' };
-        const okSrc = /^(https?:|data:image\/)/i.test(im.src);
-        const fig = okSrc
-          ? `<img src="${esc(im.src)}" alt="${esc(im.alt)}">`
-          : `<div class="ph">${PH_SVG}<span>${esc(im.alt || '圖片位置')}</span><small>在「![說明](圖片網址)」的括號裡貼上圖片網址</small></div>`;
+        const real = imgSrc(im.src, ctx.images);
+        const fig = real
+          ? `<img src="${esc(real)}" alt="${esc(im.alt)}">`
+          : `<div class="ph">${PH_SVG}<span>${esc(im.alt || '圖片位置')}</span><small>${/^img:/.test(im.src) ? '找不到這張圖片，請在編輯器的「圖片」區重新上傳' : '在編輯器的「圖片」區上傳圖片，或在括號裡貼上圖片網址'}</small></div>`;
         body = `${h2}<div class="im"><figure${rc('frame')}>${fig}</figure><div class="im-t">${sub()}${ul(s.items)}${paras()}</div></div>`;
         break;
       }
@@ -180,6 +183,7 @@
       default: // bullets
         body = `${h2}${sub()}${ul(s.items)}${paras()}`;
     }
+    if (s.refs.length) body += `<div${rc('refs')}>${s.refs.map(x => `<span>${link(inl(x))}</span>`).join('')}</div>`;
     const cfg = ctx.cfg || {};
     const foot = (cfg.footer || cfg.footText) && !['cover', 'section', 'end'].includes(s.type)
       ? `<div class="pf"><span>${esc(cfg.footText || '')}</span><b>${cfg.footer ? ctx.n + ' / ' + ctx.total : ''}</b></div>` : '';
@@ -187,8 +191,19 @@
     return `<section class="slide t-${s.type}" data-title="${esc(title)}" data-kind="${NAME[s.type]}" data-note="${esc(s.note.join('\n'))}"><div class="deco"></div>${body}${foot}</section>`;
   }
 
-  function cells(slides, cfg) {
-    const ctx = { sec: 0, cfg: cfg || {}, total: slides.length };
+  // 圖片：網址、data: 圖片，或 img:代號（存在編輯器裡的圖片）
+  function imgSrc(src, images) {
+    src = String(src || '').trim();
+    if (/^img:/.test(src)) { const v = images && images[src.slice(4)]; return v && /^data:image\//.test(v) ? v : ''; }
+    return /^(https?:|data:image\/)/i.test(src) ? src : '';
+  }
+  const link = h => h.replace(/https?:\/\/[^\s<>"'（）。，；]+/g, u => {
+    let tail = '';
+    while (/[.,;:!?]$/.test(u) || (/\)$/.test(u) && (u.match(/\(/g) || []).length < (u.match(/\)/g) || []).length)) { tail = u.slice(-1) + tail; u = u.slice(0, -1); }
+    return `<a href="${u}" target="_blank" rel="noopener">${u}</a>${tail}`;
+  });
+  function cells(slides, cfg, images) {
+    const ctx = { sec: 0, cfg: cfg || {}, total: slides.length, images: images || {} };
     return slides.map((s, j) => { ctx.n = j + 1; return `<div class="cell" data-n="${j + 1}">${render(s, ctx)}</div>`; }).join('');
   }
 
@@ -249,6 +264,12 @@ h2{font-size:52px;margin-bottom:44px;max-width:1080px}
 .st b.lg{font-size:54px;white-space:nowrap}
 .st span{display:block;font-size:24px;line-height:1.5;color:var(--muted)}
 .src{font-size:18px;color:var(--muted);margin-top:30px}
+.refs{margin-top:28px;font-size:17px;line-height:1.55;color:var(--muted);text-align:left;max-width:1072px;display:grid;gap:4px}
+.refs span{display:block}.refs span:first-child{font-weight:700}
+.refs a{color:inherit;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px}
+.t-end .refs,.t-cover .refs{margin-left:auto;margin-right:auto}
+.p,.meta,.sub,.refs,li,blockquote{overflow-wrap:anywhere}
+.slide.measure .r{transform:none!important;transition:none!important}
 .qm{font-family:Georgia,'Times New Roman',serif;font-size:190px;line-height:.62;height:88px;color:var(--ac)}
 .t-quote blockquote{font-family:var(--hf);font-size:50px;line-height:1.5;max-width:1040px;font-weight:var(--qw,var(--hw,700))}
 .by{font-size:26px;color:var(--muted);margin-top:36px}
@@ -582,6 +603,7 @@ body.pres .pside{display:flex;position:fixed;top:0;right:0;bottom:0;width:36%;pa
         });
       });
       buildToc();
+      shrink();
       if (nav !== 'page' && 'IntersectionObserver' in window) {
         if (obs) obs.disconnect();
         obs = new IntersectionObserver(function (es) {
@@ -592,6 +614,29 @@ body.pres .pside{display:flex;position:fixed;top:0;right:0;bottom:0;width:36%;pa
         }, { root: stage, threshold: [0, .6, .9] });
         cellsEl.forEach(function (c) { obs.observe(c); });
       }
+    }
+    // 字太多：把這一頁的內容等比例縮小，直到放得下（最小 50%）
+    function shrink() {
+      var tight = [];
+      slides.forEach(function (s, j) {
+        var kids = [].filter.call(s.children, function (x) { return !/\b(deco|pf)\b/.test(x.className); });
+        kids.forEach(function (x) { x.style.zoom = ''; x._z = parseFloat(getComputedStyle(x).zoom) || 1; });
+        s.classList.add('measure');
+        var jc = s.style.justifyContent; s.style.justifyContent = 'flex-start';
+        var avail = s.clientHeight, z = 1;
+        if (avail > 0 && s.scrollHeight > avail + 2) {
+          z = Math.max(.5, Math.floor(avail / s.scrollHeight * 100) / 100);
+          while (true) {
+            kids.forEach(function (x) { x.style.zoom = x._z * z; });
+            if (s.scrollHeight <= avail + 2 || z <= .5) break;
+            z = Math.max(.5, Math.round((z - .04) * 100) / 100);
+          }
+        }
+        s.style.justifyContent = jc; s.classList.remove('measure');
+        s.setAttribute('data-fit', z);
+        if (z < .9) tight.push([j, z]);
+      });
+      tell({ fit: tight });
     }
     function mark(j) {
       cellsEl.forEach(function (c, k) { c.classList.toggle('cur', k === j); });
@@ -777,7 +822,8 @@ body.pres .pside{display:flex;position:fixed;top:0;right:0;bottom:0;width:36%;pa
     if (nav === 'page' && stepOn && isNaN(h) && !+(B.getAttribute('data-start') || 0)) apply(cur, 0);
     fit();
     addEventListener('resize', fit);
-    if (D.fonts && D.fonts.ready) D.fonts.ready.then(fit);
+    if (D.fonts && D.fonts.ready) D.fonts.ready.then(function () { shrink(); fit(); });
+    [].forEach.call(D.querySelectorAll('.stage img'), function (im) { if (!im.complete) im.addEventListener('load', shrink); });
     if (mode === 'thumb') return;
     D.addEventListener('keydown', function (e) {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -879,8 +925,8 @@ body.pres .pside{display:flex;position:fixed;top:0;right:0;bottom:0;width:36%;pa
       `data-step="${c.step ? 1 : 0}"`, `data-auto="${+c.auto || 0}"`, `data-toc="${on(c, 'toc') ? 1 : 0}"`,
       remote ? `data-remote="${esc(remote)}"` : '', `class="${opt.mode === 'thumb' ? 'thumb' : ''}"`,
     ].join(' ');
-    return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><meta name="generator" content="網頁簡報範本庫 · ${esc(theme.name)}">${fontLink(fonts)}<style>:root{${varsOf(theme, c)}}${BASE}${BASE2}${theme.css || ''}${cfgCss(c)}</style></head><body ${attrs}><div class="stage">${cells(slides, c)}</div>${ctrl}<script>(${runtime.toString()})()<\/script></body></html>`;
+    return `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)}</title><meta name="generator" content="網頁簡報範本庫 · ${esc(theme.name)}">${fontLink(fonts)}<style>:root{${varsOf(theme, c)}}${BASE}${BASE2}${theme.css || ''}${cfgCss(c)}</style></head><body ${attrs}><div class="stage">${cells(slides, c, opt.images)}</div>${ctrl}<script>(${runtime.toString()})()<\/script></body></html>`;
   }
 
-  window.WST = { TYPES, NAME, OPTS, FONTS, PALETTES, cleanCfg, parse, warnings, build, cells, titleOf, esc };
+  window.WST = { TYPES, NAME, OPTS, FONTS, PALETTES, cleanCfg, parse, warnings, build, cells, titleOf, esc, imgSrc };
 })();

@@ -36,7 +36,45 @@
   const safeName = s => (String(s || '網頁簡報').replace(/[\\/:*?"<>|\n\r]+/g, ' ').trim().slice(0, 60) || '網頁簡報');
   function blobOf(html) { return new Blob([html], { type: 'text/html;charset=utf-8' }); }
   const REMOTE = new URL('remote.html', location.href.split('#')[0]).href;
-  const deckOpt = cfg => ({ cfg: cfg || {}, remoteUrl: REMOTE });
+  /* 上傳的圖片存在這台電腦的 IndexedDB（localStorage 放不下），內容裡只寫 img:代號 */
+  const IMGS = {};
+  const IDB = (() => {
+    let dbp = null;
+    const db = () => dbp || (dbp = new Promise((ok, no) => {
+      if (!window.indexedDB) return no(new Error('no idb'));
+      const r = indexedDB.open('wst', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('imgs');
+      r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error);
+    }));
+    const tx = (m, f) => db().then(d => new Promise((ok, no) => { const t = d.transaction('imgs', m), st = t.objectStore('imgs'), out = f(st); t.oncomplete = () => ok(out && out.result); t.onerror = () => no(t.error); }));
+    return {
+      all: () => db().then(d => new Promise(ok => {
+        const m = {}, c = d.transaction('imgs').objectStore('imgs').openCursor();
+        c.onsuccess = () => { const k = c.result; if (k) { m[k.key] = k.value; k.continue(); } else ok(m); };
+        c.onerror = () => ok(m);
+      })).catch(() => ({})),
+      put: (k, v) => tx('readwrite', st => st.put(v, k)).catch(() => null),
+    };
+  })();
+  let imgsLoaded = null;
+  const loadImgs = () => imgsLoaded || (imgsLoaded = IDB.all().then(m => Object.assign(IMGS, m)));
+  // 圖片縮到最長邊 1600px、轉成 JPEG，存起來，回傳代號
+  async function addImage(file) {
+    if (!file || !/^image\//.test(file.type)) throw new Error('不是圖片檔');
+    const url = URL.createObjectURL(file);
+    try {
+      const im = await new Promise((ok, no) => { const x = new Image(); x.onload = () => ok(x); x.onerror = () => no(new Error('讀不到這張圖片')); x.src = url; });
+      const k = Math.min(1, 1600 / Math.max(im.naturalWidth, im.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(im.naturalWidth * k)); c.height = Math.max(1, Math.round(im.naturalHeight * k));
+      const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(im, 0, 0, c.width, c.height);
+      const data = c.toDataURL('image/jpeg', .86);
+      const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      IMGS[id] = data; await IDB.put(id, data);
+      return id;
+    } finally { URL.revokeObjectURL(url); }
+  }
+  const deckOpt = cfg => ({ cfg: cfg || {}, remoteUrl: REMOTE, images: IMGS });
   function download(theme, src, cfg) {
     const html = E.build(theme, src, deckOpt(cfg));
     const a = document.createElement('a');
@@ -219,7 +257,7 @@
     '- 「數字」版面：「- 數字 | 說明」，例如「- 25 分 | 專心做一件事」，最多 4 個。數字要有可靠來源，不確定就寫「（請查證）」，並在最後一行寫「資料來源：…」。',
     '- 「步驟」版面：「- 步驟名稱：一句說明」，3～5 步。',
     '- 「引言」版面：「> 引言內容」，下一行「— 出處」。不要編造名人名言。',
-    '- 「圖文」版面：「![圖片說明](圖片網址)」，沒有網址就寫「![圖片說明]()」，我之後再放圖。',
+    '- 「圖文」版面：「![畫面描述]()」，中括號裡寫一句具體的畫面描述（例如「長輩坐在床邊、腳踩止滑墊，旁邊有小夜燈」），我會拿它去生成圖片；小括號留空。',
     '- 「問答」版面：「# 題目」，選項用「- [x] 正確答案」和「- [ ] 錯誤選項」，最後一行「解答：說明」。如果是投票、沒有標準答案，全部用「- [ ]」。',
     notes ? '- 每一頁都加一行「備註：…」，寫講者在這一頁要說的話（2～3 句口語、像在跟台下聊天）。這是講稿，播放時只有講者看得到。' : '- 給講者看的提醒寫「備註：…」，播放時只有講者看得到。',
     '- 不要用表格、不要用其他 Markdown 語法，程式碼區塊外面不要放簡報內容。',
@@ -229,7 +267,7 @@
   // o: 表單值；ctx: { theme, example }（example = 要照著做的範例內容，只有「照範例」模式用）
   function aiPrompt(o, ctx) {
     const theme = ctx && ctx.theme, follow = o.mode !== 'free' && ctx && ctx.example;
-    const ex = follow ? String(ctx.example).replace(/\r/g, '').split('\n').filter(l => o.notes || !/^\s*備註[：:]/.test(l)).join('\n').trim() : '';
+    const ex = follow ? String(ctx.example).replace(/\r/g, '').split('\n').filter(l => o.notes || !/^\s*備註[：:]/.test(l)).map(l => l.replace(/^(\s*!\[.*?\]\().*?(\))/, '$1$2')).join('\n').trim() : '';
     const seq = follow ? seqOf(ex) : [];
     const same = follow && (o.pages === 'same' || Number(o.pages) === seq.length);
     const n = follow && same ? seq.length : (Number(o.pages) || 10);
@@ -257,6 +295,55 @@
       follow ? '範例（照這個格式和頁面順序寫）：' : '格式範例：',
     ], follow ? ['```', ex, '```'] : SHORT_EX(o.notes));
     return lines.filter((l, k) => l !== '' || lines[k - 1] !== '').join('\n');
+  }
+
+  // 請 AI 直接做成一個完整的網頁簡報（設計交給 AI）
+  function htmlPrompt(o, ctx) {
+    const t = ctx.theme, v = t.vars || {}, content = String(ctx.content || '').trim();
+    const n = content && o.pages === 'same' ? seqOf(content).length : (Number(o.pages) || 10);
+    const fonts = [...new Set((t.fonts || []).map(f => f.split(':')[0]))].join('、') || 'Noto Sans TC';
+    const lines = [
+      '請幫我做一份「網頁簡報」：一個完整、用瀏覽器打開就能播放的 HTML 檔。',
+      `主題：${o.topic.trim()}`,
+      `對象：${o.aud.trim() || '（還沒決定）'}`,
+      `長度：${n} 頁${o.min ? `，報告時間約 ${o.min} 分鐘` : ''}`,
+      o.must && o.must.trim() ? `一定要提到：${o.must.trim()}` : '',
+      content ? (seqOf(content).length === n ? '簡報內容請照下面這份來做，一頁對一頁；' : `簡報內容請照下面這份來做。這份有 ${seqOf(content).length} 頁，請調整成 ${n} 頁（${n > seqOf(content).length ? '依主題補充內容' : '合併或刪減比較次要的頁'}）；`) + '文字可以潤飾，但不要改掉重點、數字和資料來源。「=== 」開頭是每一頁的版面，「備註：」是講稿：' :'內容請你依主題規劃，數字和資料要有可靠來源，不確定就標「（請查證）」。',
+      content ? '```\n' + content.replace(/^(\s*!\[.*?\]\().*?(\))/gm, '$1$2') + '\n```' : '',
+      '',
+      '設計：',
+      `- 風格參考「${t.name}」：${t.desc}主色 ${v.ac || ''}、背景 ${v.bg || ''}、文字 ${v.fg || ''}；字型用 Google Fonts 的 ${fonts}。`,
+      '- 每頁是 16:9 的畫布（1280×720），等比例縮放、置中填滿視窗。',
+      '- 每一頁的字都要完整放得下，不能被裁掉或超出畫面；字多就自動縮小，或拆成兩頁。',
+      '- 版面要有變化：封面、目錄、重點、左右對照、大數字、步驟、引言、圖文、問答（點選項會顯示對錯和解答）、結尾。換頁和文字出現要有簡單動畫。',
+      '- 需要圖片的地方，用 inline SVG 畫簡單、好看的插圖；不要連到外部圖片網址。',
+      '',
+      '操作：',
+      '- ← → 鍵、空白鍵、點畫面、手機左右滑都能換頁；右下角顯示頁碼。',
+      '- F 鍵全螢幕。' + (o.notes ? '每一頁都寫 2～3 句口語講稿，平常隱藏，按 N 鍵顯示在畫面下方。' : ''),
+      '- 列印時一頁一張投影片（用 @media print 和 @page）。',
+      '',
+      '技術：',
+      '- 全部寫在同一個 HTML 檔裡（CSS、JavaScript 都寫在裡面），除了 Google Fonts，不要用其他外部檔案或套件。',
+      '- 用繁體中文（台灣用語）。資料來源放在相關頁面的下方或最後一頁，字小一點。不要編造數據和名人名言。',
+      '',
+      '如果有不清楚或缺少的資訊（例如對象、報告時間、一定要講的重點），請先問我，確認後再做。',
+      '做好後，把整個 HTML 放在一個程式碼區塊裡輸出，不要省略任何部分。',
+    ];
+    return lines.filter((l, k) => l !== '' || lines[k - 1] !== '').join('\n');
+  }
+
+  // 生圖提示詞：給 ChatGPT / Gemini 畫圖文頁的圖
+  const IMG_STYLE = { 衛教: '清爽、親切的衛教扁平插畫', 長者: '溫暖柔和的扁平插畫，人物是台灣的長輩', 課堂: '活潑、乾淨的扁平插畫', 報告: '乾淨寫實的照片風格', 提案: '乾淨寫實的照片風格', 活動: '明亮活潑的插畫' };
+  function imgPrompt(slot, theme, deck) {
+    const v = theme.vars || {};
+    return [
+      `請幫我畫一張圖，要放在簡報「${deck}」第 ${slot.n} 頁「${slot.title || '圖文'}」。`,
+      `畫面內容：${slot.alt || slot.title || '（請依頁面標題設計）'}`,
+      `風格：${IMG_STYLE[theme.tags[0]] || '乾淨的扁平插畫'}；配色以 ${v.ac || ''} 和柔和的淺色為主，畫面簡單、留白多。`,
+      '圖裡不要放任何文字、字母或數字。比例 4:3 橫式。',
+      '如果畫面內容不夠清楚，先問我再畫。',
+    ].join('\n');
   }
 
   // 貼回後格式有問題：請 AI 修正
@@ -339,7 +426,8 @@
     store.set('wst-draft', d);
     let theme = byId(d.theme);
     const ai = Object.assign({ topic: '', aud: '', pages: 'same', min: '', must: '', notes: true, mode: 'tpl' }, store.get('wst-ai', isAi) || {});
-    if (!['tpl', 'mine', 'free'].includes(ai.mode)) ai.mode = 'tpl';
+    if (!['tpl', 'mine', 'free', 'html'].includes(ai.mode)) ai.mode = 'tpl';
+    const PAGE_OPTS = [6, 8, 10, 12, 15, 20, 25, 30];
     const groups = TAGS.map(tag => `<optgroup label="${tag}">${THEMES.filter(t => t.tags[0] === tag).map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</optgroup>`).join('');
 
     view.innerHTML = `
@@ -361,6 +449,7 @@
           <button type="button" class="och" data-mode="tpl">照這套範本的頁面安排</button>
           <button type="button" class="och" data-mode="mine">照我現在內容的頁面安排</button>
           <button type="button" class="och" data-mode="free">讓 AI 自己安排頁面</button>
+          <button type="button" class="och" data-mode="html">請 AI 直接做成網頁</button>
         </div>
         <p class="hint aseq" id="aSeq"></p>
         <label class="fld">主題（必填）<input id="aTopic" value="${esc(ai.topic)}" placeholder="例如：高血壓的居家量測"></label>
@@ -369,7 +458,7 @@
           <label class="fld">一定要提到<input id="aMust" value="${esc(ai.must)}" placeholder="可以不填"></label>
         </div>
         <div class="f2">
-          <label class="fld">頁數<select id="aPages"><option value="same">跟範例一樣</option>${[6, 8, 10, 12, 15].map(n => `<option>${n}</option>`).join('')}</select></label>
+          <div class="fld">頁數<div class="pgs"><select id="aPages" aria-label="頁數"><option value="same">跟範例一樣</option>${PAGE_OPTS.map(n => `<option>${n}</option>`).join('')}<option value="custom">自訂…</option></select><input id="aPagesN" type="number" min="3" max="60" inputmode="numeric" aria-label="自訂頁數" placeholder="頁" hidden></div></div>
           <label class="fld">報告時間（分鐘）<input id="aMin" inputmode="numeric" value="${esc(ai.min)}" placeholder="可以不填"></label>
         </div>
         <label class="ck"><input type="checkbox" id="aNotes"${ai.notes !== false ? ' checked' : ''}> 也請 AI 寫每一頁的講稿 <small>講者模式和手機遙控上看得到，台下看不到</small></label>
@@ -378,7 +467,11 @@
           <button class="btn" id="aGem">${ICON.copy}複製並打開 Gemini</button>
           <button class="btn ghost" id="aCopy">只複製</button>
         </div>
-        <p class="hint">AI 寫好後，按它程式碼區塊右上角的「複製」，再到下面按「清空並貼上」。AI 若先問你問題，回答完它才會開始寫。貼回來如果頁數不對或格式有問題，下面會出現「複製修正指令給 AI」。</p>
+        <p class="hint" id="aBack">AI 寫好後，按它程式碼區塊右上角的「複製」，再到下面按「清空並貼上」。AI 若先問你問題，回答完它才會開始寫。貼回來如果頁數不對或格式有問題，下面會出現「複製修正指令給 AI」。</p>
+        <div class="hbox" id="aHtmlBox" hidden>
+          <p class="hint">AI 做好後，複製它的整段 HTML，按下面的按鈕貼上，就能預覽和下載。ChatGPT 和 Gemini 的 Canvas 也能直接預覽。這種網頁由 AI 自己設計，跟左邊範本的預覽會不一樣，也不能用這裡的樣式設定、講者模式和手機遙控。</p>
+          <button class="btn" id="aHtmlOpen">${ICON.play}預覽 AI 做好的網頁</button>
+        </div>
       </div>
     </details>
     <div class="pane">
@@ -389,6 +482,11 @@
       <div class="afix" id="eFix" hidden><span id="eFixMsg"></span><button type="button" class="btn sm" id="eFixBtn">${ICON.copy}複製修正指令給 AI</button></div>
       <div class="okline" id="eOk"></div>
     </div>
+    <div class="pane imgp" id="imgp">
+      <h2>圖片 <small>圖文頁的圖；也可以在內容框直接貼上圖片</small><span class="iha" id="imgHead"></span></h2>
+      <div id="imgList"></div>
+      <input type="file" id="imgFile" accept="image/*" hidden>
+    </div>
   </div>
   <div class="prev-wrap">
     <div class="player"><iframe id="prev" title="簡報預覽" allow="fullscreen" allowfullscreen></iframe></div>
@@ -396,7 +494,7 @@
       <button class="btn sm" id="pPrev" aria-label="上一頁">‹</button>
       <span class="pg" id="pPg">1 / 1</span>
       <button class="btn sm" id="pNext" aria-label="下一頁">›</button>
-      <span style="margin-left:auto">游標在哪一頁，預覽就跳到哪一頁</span>
+      <span class="pdemo" id="pDemo">游標在哪一頁，預覽就跳到哪一頁</span>
     </div>
     <p class="hint">格式不熟？看 <a href="#guide">使用說明</a>。內容和設定會自動存在這台電腦的瀏覽器裡。</p>
     ${setPanel(cfg, theme)}
@@ -404,7 +502,7 @@
 </div>`;
     const ta = $('#src'), prev = $('#prev'), sel = $('#eTheme');
     sel.value = theme.id;
-    let ready = false, at = 0, t1 = 0, fromAI = false, wantN = 0, fixList = [], fixPage = 0;
+    let ready = false, at = 0, t1 = 0, fromAI = false, wantN = 0, fixList = [], fixPage = 0, fitW = [], onReady = null;
     if (note) toast(note, 4800);
 
     const slideAt = () => {
@@ -414,7 +512,7 @@
       return k;
     };
     const check = () => {
-      const sl = E.parse(ta.value), w = E.warnings(sl);
+      const sl = E.parse(ta.value), w = E.warnings(sl).concat(fitW);
       $('#eWarn').innerHTML = w.length ? `<ul>${w.slice(0, 6).map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
       $('#eOk').textContent = !w.length && sl.length ? `共 ${sl.length} 頁，格式都正確` : '';
       const pm = fromAI && wantN && sl.length && sl.length !== wantN ? `AI 寫了 ${sl.length} 頁，你要的是 ${wantN} 頁。` : '';
@@ -422,17 +520,56 @@
       fixList = w.slice(); fixPage = pm ? wantN : 0;
       $('#eFix').hidden = !show;
       $('#eFixMsg').textContent = show ? (pm || '貼回的內容有格式問題。') + '可以請 AI 修正：' : '';
-      drawMode();
+      drawMode(); drawImgs();
     };
-    const full = () => { ready = false; prev.srcdoc = E.build(theme, ta.value, Object.assign(deckOpt(cfg), { start: at })); };
+    const full = (start) => { ready = false; prev.srcdoc = E.build(theme, ta.value, Object.assign(deckOpt(cfg), { start: start == null ? at : start })); };
     const swap = () => {
       const sl = E.parse(ta.value);
       if (!ready || !sl.length) return full();
-      send(prev, { swap: E.cells(sl, cfg), at });
+      send(prev, { swap: E.cells(sl, cfg, IMGS), at });
     };
-    hookFrame(prev, m => { if (typeof m.slide === 'number') { ready = true; $('#pPg').textContent = `${m.slide + 1} / ${m.total}`; } });
+    hookFrame(prev, m => {
+      if (typeof m.slide === 'number') { $('#pPg').textContent = `${m.slide + 1} / ${m.total}`; if (!ready) { ready = true; if (onReady) { const f = onReady; onReady = null; setTimeout(f, 250); } } }
+      if (Array.isArray(m.fit)) {
+        const nw = m.fit.map(([j, z]) => `第 ${j + 1} 頁字太多，已自動縮小到 ${Math.round(z * 100)}%，建議刪減或拆成兩頁`);
+        if (nw.join() !== fitW.join()) { fitW = nw; check(); }
+      }
+    });
     const save = () => store.set('wst-draft', { theme: theme.id, src: ta.value, cfg });
-    bindSet($('#setp'), () => cfg, v => { cfg = E.cleanCfg(v); save(); full(); }, () => theme);
+
+    // 改一個設定：預覽跳到看得出差別的那一頁，並示範效果
+    const optName = (k, val) => { const o = E.OPTS.find(x => x.key === k); if (!o) return ''; const it = (o.items || []).find(x => x.v === (val == null ? '' : String(val))); return o.n + (it ? `「${it.n}」` : o.type === 'check' ? (val ? '：開' : '：關') : ''); };
+    const DEMO = {
+      bullet: ['bullets', 'image', 'agenda'], heading: ['bullets', 'two', 'stats'], card: ['two', 'stats', 'quiz'],
+      align: ['bullets', 'two'], valign: ['bullets', 'image'], size: ['bullets', 'two'], space: ['bullets', 'two'],
+      footer: ['bullets', 'two', 'stats'], footText: ['bullets', 'two', 'stats'], anim: ['bullets', 'steps', 'stats'], step: ['bullets', 'agenda', 'steps'],
+    };
+    const findType = types => { const sl = E.parse(ta.value); const cur = sl[at]; if (cur && types.includes(cur.type)) return at; for (const t of types) { const j = sl.findIndex(x => x.type === t); if (j >= 0) return j; } return at; };
+    const demo = (k, val) => {
+      const N = E.parse(ta.value).length, name = optName(k, val);
+      let start = at, then = null, msg = name ? `預覽：${name}` : '預覽已更新';
+      if (k === 'tr' || k === 'speed') {
+        const j = Math.min(at, Math.max(0, N - 2)); start = j;
+        then = () => send(prev, { go: j + 1 }); msg += `（第 ${j + 1} → ${j + 2} 頁）`;
+      } else if (k === 'anim' || k === 'step') {
+        const j = findType(DEMO[k]); start = j > 0 ? j - 1 : Math.min(1, N - 1);
+        then = () => { send(prev, { go: j, f: 0 }); if (cfg.step) { setTimeout(() => send(prev, { key: 'ArrowRight' }), 700); setTimeout(() => send(prev, { key: 'ArrowRight' }), 1400); } };
+        msg += k === 'step' && cfg.step ? `（第 ${j + 1} 頁，按 → 一個一個出現）` : `（第 ${j + 1} 頁）`;
+      } else if (DEMO[k]) { start = findType(DEMO[k]); msg += `（第 ${start + 1} 頁）`; }
+      else if (k === 'toc') { if (on(cfg, 'toc')) { then = () => send(prev, { key: 't' }); msg += '（按 T 或右下角圖示打開）'; } }
+      else if (k === 'nav') msg += cfg.nav ? '（在預覽裡捲動看看）' : '';
+      else if (['snap', 'auto', 'remote'].includes(k)) msg += '：播放時才看得出來';
+      at = start; full(start); onReady = then;
+      $('#pDemo').textContent = msg; $('#pDemo').classList.add('on');
+      const r = prev.getBoundingClientRect();
+      if (r.top < 0 || r.bottom > innerHeight) prev.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    };
+    const on = (c, k) => { const o = E.OPTS.find(x => x.key === k); return c[k] == null ? !!(o && o.def) : !!c[k]; };
+    bindSet($('#setp'), () => cfg, v => {
+      const old = cfg; cfg = E.cleanCfg(v); save();
+      const ks = [...new Set(Object.keys(old).concat(Object.keys(cfg)))].filter(k => JSON.stringify(old[k]) !== JSON.stringify(cfg[k]));
+      if (ks.length === 1) demo(ks[0], cfg[ks[0]]); else { full(); $('#pDemo').textContent = ks.length ? '預覽：已恢復範本預設' : '游標在哪一頁，預覽就跳到哪一頁'; }
+    }, () => theme);
     ta.addEventListener('input', () => { save(); clearTimeout(t1); t1 = setTimeout(() => { at = slideAt(); swap(); check(); }, 350); });
     const follow = () => { const k = slideAt(); if (k !== at) { at = k; send(prev, { go: k }); } };
     ta.addEventListener('click', follow); ta.addEventListener('keyup', e => { if (/Arrow|Page|Home|End/.test(e.key)) follow(); });
@@ -470,6 +607,63 @@
         toast(txt ? '剪貼簿裡的內容不是簡報格式，請手動貼上（⌘V 或 Ctrl+V）' : '已清空，請按 ⌘V 或 Ctrl+V 貼上 AI 寫的內容', 4000);
       }
     };
+    // 圖片：列出每一個圖文頁，可以上傳、換圖、複製生圖提示詞
+    const slots = () => E.parse(ta.value).map((s, j) => ({ s, j })).filter(x => x.s.type === 'image').map(({ s, j }) => ({ j, n: j + 1, title: s.title.replace(/\*\*/g, ''), alt: s.img ? s.img.alt : '', src: s.img ? s.img.src : '', real: E.imgSrc(s.img ? s.img.src : '', IMGS) }));
+    let imgSig = '', upJ = -1;
+    const drawImgs = () => {
+      const ss = slots(), sig = JSON.stringify(ss.map(x => [x.j, x.title, x.alt, x.src, !!x.real]));
+      if (sig === imgSig) return; imgSig = sig;
+      $('#imgHead').innerHTML = ss.length ? `<button class="btn sm ghost" id="imgAll">${ICON.copy}複製全部生圖提示詞</button>` : '';
+      $('#imgList').innerHTML = ss.length ? ss.map(x => `<div class="irow" data-j="${x.j}">
+        <div class="ith">${x.real ? `<img src="${esc(x.real)}" alt="">` : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 17-5-5-9 8"/></svg>'}</div>
+        <div class="iinfo"><b>第 ${x.n} 頁　${esc(x.title || '圖文')}</b><span>${esc(x.alt || '還沒寫畫面描述：在「![ ]」的中括號裡寫要畫什麼')}</span></div>
+        <div class="iacts"><button type="button" class="btn sm${x.real ? '' : ' pri'}" data-a="up">${x.real ? '換一張' : '上傳圖片'}</button><button type="button" class="btn sm" data-a="pr">${ICON.copy}生圖提示詞</button>${x.real ? '<button type="button" class="btn sm ghost" data-a="rm">移除</button>' : ''}</div>
+      </div>`).join('') + '<p class="hint">提示詞貼到 ChatGPT 或 Gemini 畫圖，下載後按「上傳圖片」。也可以把圖片直接拖到那一行。圖片只存在這台電腦，下載 HTML 時會一起放進檔案。</p>'
+        : '<p class="hint">還沒有圖文頁。按上面「加一頁：圖文」，或在任何一頁加一行「![畫面描述]()」。</p>';
+    };
+    const setSrc = (j, src) => {
+      const sl = E.parse(ta.value), s0 = sl[j]; if (!s0) return;
+      const lines = ta.value.split('\n'), end = sl[j + 1] ? sl[j + 1].line : lines.length;
+      let k = -1; for (let i = s0.line + 1; i < end; i++) if (/^\s*!\[/.test(lines[i])) { k = i; break; }
+      if (k >= 0) lines[k] = lines[k].replace(/^(\s*!\[.*?\]\().*?(\).*)$/, (m0, a, b) => a + src + b);
+      else { let ti = s0.line + 1; while (ti < end && !/^\s*#\s/.test(lines[ti])) ti++; lines.splice(ti < end ? ti + 1 : s0.line + 1, 0, `![圖片](${src})`); }
+      ta.value = lines.join('\n'); at = j; save(); full(j); check();
+    };
+    const useFile = async (file, j) => {
+      try { toast('處理圖片中…'); const id = await addImage(file); setSrc(j, 'img:' + id); toast('已放上圖片'); }
+      catch (e) { toast(e.message || '圖片放不上去，請換一張試試', 3600); }
+    };
+    $('#imgList').addEventListener('click', e => {
+      const b = e.target.closest('[data-a]'), row = e.target.closest('.irow'); if (!b || !row) return;
+      const j = +row.dataset.j, x = slots().find(y => y.j === j); if (!x) return;
+      if (b.dataset.a === 'up') { upJ = j; $('#imgFile').value = ''; $('#imgFile').click(); }
+      else if (b.dataset.a === 'rm') setSrc(j, '');
+      else if (b.dataset.a === 'pr') toast(copyNow(imgPrompt(x, theme, E.titleOf(E.parse(ta.value), theme.name))) ? '已複製提示詞，到 ChatGPT 或 Gemini 貼上，畫好後下載，再回來上傳' : '沒複製成功，請再試一次', 4200);
+    });
+    $('#imgHead').addEventListener('click', e => {
+      if (!e.target.closest('#imgAll')) return;
+      const deck = E.titleOf(E.parse(ta.value), theme.name), ss = slots();
+      const all = `下面有 ${ss.length} 張簡報用的圖，請一張一張畫，每畫完一張就停下來，等我說「下一張」再畫下一張。\n\n` + ss.map((x, k) => `【第 ${k + 1} 張】\n` + imgPrompt(x, theme, deck)).join('\n\n');
+      toast(copyNow(all) ? `已複製 ${ss.length} 張圖的提示詞` : '沒複製成功，請再試一次');
+    });
+    $('#imgFile').addEventListener('change', e => { const f = e.target.files[0]; if (f && upJ >= 0) useFile(f, upJ); });
+    $('#imgList').addEventListener('dragover', e => { const row = e.target.closest('.irow'); if (row) { e.preventDefault(); row.classList.add('drop'); } });
+    $('#imgList').addEventListener('dragleave', e => { const row = e.target.closest('.irow'); if (row) row.classList.remove('drop'); });
+    $('#imgList').addEventListener('drop', e => { const row = e.target.closest('.irow'); if (!row) return; e.preventDefault(); row.classList.remove('drop'); const f = e.dataTransfer.files[0]; if (f) useFile(f, +row.dataset.j); });
+    ta.addEventListener('paste', e => {
+      const f = [...(e.clipboardData ? e.clipboardData.files : [])].find(x => /^image\//.test(x.type)); if (!f) return;
+      e.preventDefault();
+      const j = slideAt(), sl = E.parse(ta.value);
+      if (sl[j] && sl[j].type === 'image') { useFile(f, j); return; }
+      addImage(f).then(id => {
+        const pos = ta.selectionStart, v = ta.value, eol = v.indexOf('\n', pos);
+        const cut = eol < 0 ? v.length : eol, ins = `\n![圖片](img:${id})`;
+        ta.value = v.slice(0, cut) + ins + v.slice(cut); ta.setSelectionRange(cut + ins.length, cut + ins.length);
+        at = slideAt(); save(); full(); check(); toast('已放上圖片，這一頁會用圖文版面');
+      }, er => toast(er.message || '圖片放不上去', 3600));
+    });
+    loadImgs().then(() => { if (/!\[[^\]]*\]\(img:/.test(ta.value)) full(); imgSig = ''; drawImgs(); });
+
     $('#pPrev').onclick = () => send(prev, { key: 'ArrowLeft' });
     $('#pNext').onclick = () => send(prev, { key: 'ArrowRight' });
     $('#ePlay').onclick = () => openDeck(theme, ta.value, '', cfg);
@@ -480,30 +674,44 @@
     let mode = ai.mode;
     const mineOk = () => !isSample(ta.value) && E.parse(ta.value).length >= 2;
     const exampleSrc = () => mode === 'mine' ? ta.value : mode === 'tpl' ? SAMPLES[theme.sample] : '';
-    const aiVals = () => ({ topic: $('#aTopic').value, aud: $('#aAud').value, pages: $('#aPages').value, min: $('#aMin').value.replace(/\D/g, ''), must: $('#aMust').value, notes: $('#aNotes').checked, mode });
-    const aiCtx = () => ({ theme, example: exampleSrc() });
+    const pagesVal = () => { const v = $('#aPages').value; if (v !== 'custom') return v; const n = Math.round(+$('#aPagesN').value); return n >= 3 ? String(Math.min(60, n)) : '10'; };
+    const aiVals = () => ({ topic: $('#aTopic').value, aud: $('#aAud').value, pages: pagesVal(), min: $('#aMin').value.replace(/\D/g, ''), must: $('#aMust').value, notes: $('#aNotes').checked, mode });
+    const aiCtx = () => ({ theme, example: exampleSrc(), content: mode === 'html' && mineOk() ? ta.value : '' });
     const drawMode = () => {
       if (mode === 'mine' && !mineOk()) mode = 'tpl';
       $$('.amode .och').forEach(b => { b.setAttribute('aria-pressed', b.dataset.mode === mode); if (b.dataset.mode === 'mine') b.hidden = !mineOk(); });
       const ps = $('#aPages'), so = ps.querySelector('[value=same]');
       so.hidden = so.disabled = mode === 'free';
       if (mode === 'free' && ps.value === 'same') ps.value = '10';
+      $('#aPagesN').hidden = ps.value !== 'custom';
+      $('#aHtmlBox').hidden = mode !== 'html'; $('#aBack').hidden = mode === 'html';
+      if (mode === 'html') {
+        const has = mineOk(), n = has ? E.parse(ta.value).length : 0;
+        so.hidden = so.disabled = !has; if (!has && ps.value === 'same') ps.value = '10';
+        so.textContent = `跟我的內容一樣（${n} 頁）`;
+        $('#aSeq').textContent = has ? `會把你編輯區的內容（${n} 頁）交給 AI，請它自己設計成一個完整的網頁簡報。版面、配色和動畫由 AI 決定。` : '編輯區還是範例內容，AI 會依你填的主題自己規劃內容和設計。想照自己的內容做，先把內容寫進編輯區。';
+        return;
+      }
       if (mode === 'free') { $('#aSeq').textContent = 'AI 會依主題自己決定用哪些版面、排成幾頁。'; return; }
       const seq = seqOf(exampleSrc());
       so.textContent = `跟範例一樣（${seq.length} 頁）`;
       $('#aSeq').innerHTML = `${mode === 'tpl' ? `會把「${esc(theme.name)}」的範例內容一起給 AI` : '會把你現在編輯區的內容當範例給 AI'}，照同樣的頁面安排寫你的主題：<span class="seq">${seq.map(esc).join(' → ')}</span>`;
     };
-    $('#aPages').value = [...$('#aPages').options].some(x => x.value === String(ai.pages)) ? String(ai.pages) : 'same';
+    if ([...$('#aPages').options].some(x => x.value === String(ai.pages))) $('#aPages').value = String(ai.pages);
+    else if (+ai.pages >= 3) { $('#aPages').value = 'custom'; $('#aPagesN').value = ai.pages; }
+    else $('#aPages').value = 'same';
     drawMode();
     $('.amode').addEventListener('click', e => { const b = e.target.closest('[data-mode]'); if (!b) return; mode = b.dataset.mode; drawMode(); store.set('wst-ai', aiVals()); });
-    ['aTopic', 'aAud', 'aPages', 'aMin', 'aMust', 'aNotes'].forEach(id => { const x = $('#' + id); x.addEventListener('input', () => store.set('wst-ai', aiVals())); x.addEventListener('change', () => store.set('wst-ai', aiVals())); });
+    $('#aPages').addEventListener('change', () => { drawMode(); if ($('#aPages').value === 'custom') { $('#aPagesN').focus(); } });
+    ['aTopic', 'aAud', 'aPages', 'aPagesN', 'aMin', 'aMust', 'aNotes'].forEach(id => { const x = $('#' + id); x.addEventListener('input', () => store.set('wst-ai', aiVals())); x.addEventListener('change', () => store.set('wst-ai', aiVals())); });
     sel.addEventListener('change', drawMode);
     const goAI = url => {
       const o = aiVals();
       if (!o.topic.trim()) { toast('先寫上簡報主題'); $('#aTopic').focus(); return; }
       store.set('wst-ai', o);
+      if ($('#aPages').value === 'custom' && !(+$('#aPagesN').value >= 3)) { toast('自訂頁數請填 3～60'); $('#aPagesN').focus(); return; }
       wantN = o.mode !== 'free' && o.pages === 'same' ? seqOf(exampleSrc()).length : Number(o.pages) || 10;
-      const ok = copyNow(aiPrompt(o, aiCtx()));
+      const ok = copyNow(o.mode === 'html' ? htmlPrompt(o, aiCtx()) : aiPrompt(o, aiCtx()));
       if (url) {
         window.open(url, '_blank', 'noopener');
         toast(ok ? '已複製指令，到新分頁的對話框貼上（⌘V 或 Ctrl+V）送出' : '沒複製成功，請按「只複製」再試一次', 4200);
@@ -514,9 +722,54 @@
     $('#aCopy').onclick = () => goAI('');
     $('#eFixBtn').onclick = () => toast(copyNow(fixPrompt(fixList, fixPage)) ? '已複製修正指令，回到 AI 的對話貼上送出' : '沒複製成功，請再試一次', 4200);
     if (openAI) { openAI = false; $('#aiBox').open = true; mode = 'tpl'; drawMode(); store.set('wst-ai', aiVals()); setTimeout(() => $('#aTopic').focus(), 60); }
-    window.WST_APP = { aiPrompt: () => aiPrompt(aiVals(), aiCtx()), fixPrompt: () => fixPrompt(fixList, fixPage), wantN: () => wantN };
+    $('#aHtmlOpen').onclick = () => htmlViewer();
+    window.WST_APP = { aiPrompt: () => mode === 'html' ? htmlPrompt(aiVals(), aiCtx()) : aiPrompt(aiVals(), aiCtx()), fixPrompt: () => fixPrompt(fixList, fixPage), wantN: () => wantN, imgPrompt: j => { const x = slots().find(y => y.j === j); return x ? imgPrompt(x, theme, E.titleOf(E.parse(ta.value), theme.name)) : ''; }, setImage: (j, f) => useFile(f, j) };
 
     full(); check();
+  }
+
+  /* ---------- AI 做的網頁：貼上 → 預覽（隔離執行）→ 下載 ---------- */
+  function htmlViewer() {
+    let box = $('#hv');
+    if (!box) {
+      box = document.createElement('div'); box.id = 'hv'; box.className = 'hv';
+      box.innerHTML = `<div class="hv-card" role="dialog" aria-modal="true" aria-label="預覽 AI 做好的網頁">
+        <div class="hv-h"><h2>預覽 AI 做好的網頁</h2><button type="button" class="btn sm ghost" data-a="x">關閉</button></div>
+        <textarea id="hvSrc" spellcheck="false" placeholder="把 AI 給你的整段 HTML 貼在這裡（從 <!doctype html> 到 </html>）"></textarea>
+        <div class="hv-p"><iframe id="hvFrame" title="AI 做的網頁預覽" sandbox="allow-scripts allow-popups allow-modals" allow="fullscreen"></iframe><div class="hv-empty" id="hvEmpty">貼上 HTML 後會在這裡預覽。點一下預覽，就能用 ← → 換頁。</div></div>
+        <div class="hv-a"><button type="button" class="btn dark" data-a="fs">${ICON.play}全螢幕預覽</button><button type="button" class="btn" data-a="dl">${ICON.dl}下載 HTML</button><span class="hint" id="hvMsg"></span></div>
+      </div>`;
+      document.body.appendChild(box);
+      const src = $('#hvSrc', box), fr = $('#hvFrame', box);
+      const clean = v => { v = String(v || '').trim(); const m = v.match(/```(?:html)?\s*\n([\s\S]*?)```/i); return (m ? m[1] : v).trim(); };
+      const show = () => {
+        const h = clean(src.value), ok = /<html|<!doctype|<body/i.test(h);
+        $('#hvEmpty', box).hidden = ok; fr.srcdoc = ok ? h : '';
+        $('#hvMsg', box).textContent = h && !ok ? '看起來不是完整的 HTML，請複製 AI 給的整段程式碼' : (ok && !/<\/html>/i.test(h) ? '最後好像少了 </html>，可能沒複製完整，請 AI「把整份 HTML 完整輸出」' : '');
+      };
+      let tt = 0;
+      src.addEventListener('input', () => { clearTimeout(tt); tt = setTimeout(show, 300); });
+      box.addEventListener('click', e => {
+        const a = e.target.closest('[data-a]'); if (e.target === box) box.hidden = true; if (!a) return;
+        const h = clean(src.value);
+        if (a.dataset.a === 'x') box.hidden = true;
+        else if (!/<html|<!doctype|<body/i.test(h)) toast('先貼上 AI 做好的 HTML');
+        else if (a.dataset.a === 'fs') { const p = $('.hv-p', box); (p.requestFullscreen || p.webkitRequestFullscreen || (() => {})).call(p); fr.focus(); }
+        else if (a.dataset.a === 'dl') {
+          const t = (h.match(/<title>([^<]*)<\/title>/i) || [])[1];
+          const l = document.createElement('a'); l.href = URL.createObjectURL(blobOf(h)); l.download = safeName(t || 'AI 網頁簡報') + '.html';
+          document.body.appendChild(l); l.click(); l.remove(); setTimeout(() => URL.revokeObjectURL(l.href), 4000);
+          toast('已下載，用瀏覽器打開就能播放');
+        }
+      });
+      document.addEventListener('keydown', e => { if (e.key === 'Escape' && !box.hidden && !document.fullscreenElement) box.hidden = true; });
+      box._show = show;
+    }
+    box.hidden = false;
+    const src = $('#hvSrc', box);
+    const fill = t => { if (t && /<html|<!doctype|<body/i.test(t)) { src.value = t; box._show(); toast('已貼上剪貼簿裡的網頁'); } };
+    try { if (navigator.clipboard && navigator.clipboard.readText) navigator.clipboard.readText().then(fill, () => {}); } catch (e) {}
+    setTimeout(() => src.focus(), 50);
   }
 
   /* ---------- 使用說明 ---------- */
@@ -541,12 +794,22 @@
   <table class="tbl">
     <thead><tr><th>頁面安排</th><th>AI 會怎麼做</th><th>適合</th></tr></thead>
     <tbody>
-      <tr><td>照這套範本的頁面安排</td><td>把這套範本的整份範例一起給 AI，照同樣的版面順序寫你的主題。頁數可以「跟範例一樣」，或選幾頁讓 AI 增減。</td><td>想要跟示範一樣完整、有目錄、測驗、結尾</td></tr>
+      <tr><td>照這套範本的頁面安排</td><td>把這套範本的整份範例一起給 AI，照同樣的版面順序寫你的主題。頁數可以「跟範例一樣」，或選幾頁、按「自訂…」填 3～60 頁，讓 AI 增減。</td><td>想要跟示範一樣完整、有目錄、測驗、結尾</td></tr>
       <tr><td>照我現在內容的頁面安排</td><td>把你編輯區現在的內容當範例，例如你上次做好的一份，AI 照同樣的頁數和版面寫新主題。</td><td>同一系列的課，每次結構都一樣</td></tr>
       <tr><td>讓 AI 自己安排頁面</td><td>只給 AI 格式規則，由它依主題決定用哪些版面。</td><td>主題特別、不想被範本限制</td></tr>
+      <tr><td>請 AI 直接做成網頁</td><td>把你編輯區的內容（或只有主題）交給 AI，請它自己設計、寫出一個完整的 HTML 網頁簡報。做好後按「預覽 AI 做好的網頁」貼上，可以預覽、全螢幕和下載。</td><td>想看看不同的設計。版面由 AI 決定，跟這裡的範本不一樣，也不能用這裡的樣式設定、講者模式和手機遙控</td></tr>
     </tbody>
   </table>
   <p class="hint" style="margin-top:10px">AI 寫好後，複製它的程式碼區塊，回來按「清空並貼上」。如果頁數不對或格式有問題，編輯區下面會出現「複製修正指令給 AI」，貼回同一個對話就能請它改好。</p>
+  <h2>放圖片</h2>
+  <ul class="glist">
+    <li>在「圖文」頁（或任何一頁）寫一行 <code>![畫面描述]()</code>，編輯器下方的「圖片」區就會出現這一頁。</li>
+    <li>按「上傳圖片」選電腦或手機裡的圖，或把圖片拖到那一行；也可以複製圖片後，直接在內容框貼上。</li>
+    <li>沒有圖？按「生圖提示詞」複製，貼到 ChatGPT 或 Gemini 請它畫，下載後再上傳。「複製全部生圖提示詞」會一次給 AI 全部的圖，讓它一張一張畫。</li>
+    <li>上傳的圖片存在這台電腦的瀏覽器裡，內容框只會寫一個代號（例如 <code>img:abc123</code>）。下載 HTML 時，圖片會一起放進檔案，傳給別人也看得到。</li>
+  </ul>
+  <h2>字太多怎麼辦？</h2>
+  <p style="color:var(--mute);margin:0 0 12px">放不下的頁面會自動縮小字體，不會被裁掉；縮太多時，編輯區下面會提醒你哪一頁該刪減或拆成兩頁。寫在「資料來源：」後面的文獻會用小字靠左排，網址可以直接點開。</p>
   <h2>內容怎麼寫</h2>
   <p style="color:var(--mute);margin:0 0 12px">每一頁用一行 <code>=== 版面名稱</code> 開頭。<code>#</code> 是標題、<code>##</code> 是副標題、<code>-</code> 是一個重點，<code>**字**</code> 會變成強調色。</p>
   <table class="tbl">
@@ -588,7 +851,7 @@
   <h2>常見問題</h2>
   <dl class="faq">
     <dt>圖片怎麼放？</dt>
-    <dd>在「圖文」頁寫 <code>![圖片說明](圖片網址)</code>。網址要是 https:// 開頭、可以直接打開的圖片。沒有網址時會顯示一個圖片框，提醒你之後補上。</dd>
+    <dd>在編輯器下方的「圖片」區上傳，或在括號裡貼 https:// 開頭的圖片網址。詳見上面的「放圖片」。</dd>
     <dt>換範本，內容會不見嗎？</dt>
     <dd>不會。內容和樣子是分開的，在編輯器上面換範本，內容完全不變。</dd>
     <dt>內容存在哪裡？</dt>
