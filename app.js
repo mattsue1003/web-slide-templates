@@ -71,7 +71,7 @@
   const send = (iframe, msg) => { if (iframe && iframe.contentWindow) iframe.contentWindow.postMessage(Object.assign({ wst: 1 }, msg), '*'); };
 
   /* ---------- 路由 ---------- */
-  let cleanup = null;
+  let cleanup = null, openAI = false;
   function route() {
     if (cleanup) { cleanup(); cleanup = null; }
     frames.clear();
@@ -162,6 +162,7 @@
     <div class="tags">${t.tags.map(x => `<span class="tag">${x}</span>`).join('')}</div>
     <div class="acts">
       <a class="btn pri" href="#edit/${t.id}">${ICON.edit}用這個範本做簡報</a>
+      <a class="btn" href="#edit/${t.id}" id="tAI">${ICON.copy}請 AI 照這套範本寫</a>
       <button class="btn" id="tPlay">${ICON.play}全螢幕播放示範</button>
       <div class="row">
         <button class="btn" id="tDl">${ICON.dl}下載示範</button>
@@ -187,6 +188,7 @@
     ovf.srcdoc = E.build(t, src, { mode: 'ov' });
     $('#pPrev').onclick = () => send(player, { key: 'ArrowLeft' });
     $('#pNext').onclick = () => send(player, { key: 'ArrowRight' });
+    $('#tAI').onclick = () => { openAI = true; };
     $('#tPlay').onclick = () => openDeck(t, src);
     $('#tDl').onclick = () => download(t, src);
     $('#tPdf').onclick = () => openDeck(t, src, '#print');
@@ -207,48 +209,60 @@
     end: '=== 結尾\n# 謝謝聆聽\n## 歡迎提問',
   };
 
-  function aiPrompt(o) {
-    const lines = [
-      '請幫我寫一份網頁簡報的內容。',
+  // 範例內容的頁面順序：[{n:'封面'}, ...]
+  const seqOf = src => E.parse(src).map(s => E.NAME[s.type]);
+  const seqText = seq => seq.map((n, k) => `第 ${k + 1} 頁 ${n}`).join('、');
+  const RULES = notes => [
+    `- 每一頁用一行「=== 版面名稱」開頭。可用的版面：${E.TYPES.map(t => t.n).join('、')}。第一頁用封面，最後一頁用結尾。`,
+    '- 「# 」是這一頁的標題，「## 」是副標題（「左右」版面裡，「## 」是左欄和右欄的標題）。',
+    '- 「- 」是一個重點，一頁 3～5 點，每點 20 字以內。想強調的字用 **兩個星號** 包起來。',
+    '- 「數字」版面：「- 數字 | 說明」，例如「- 25 分 | 專心做一件事」，最多 4 個。數字要有可靠來源，不確定就寫「（請查證）」，並在最後一行寫「資料來源：…」。',
+    '- 「步驟」版面：「- 步驟名稱：一句說明」，3～5 步。',
+    '- 「引言」版面：「> 引言內容」，下一行「— 出處」。不要編造名人名言。',
+    '- 「圖文」版面：「![圖片說明](圖片網址)」，沒有網址就寫「![圖片說明]()」，我之後再放圖。',
+    '- 「問答」版面：「# 題目」，選項用「- [x] 正確答案」和「- [ ] 錯誤選項」，最後一行「解答：說明」。如果是投票、沒有標準答案，全部用「- [ ]」。',
+    notes ? '- 每一頁都加一行「備註：…」，寫講者在這一頁要說的話（2～3 句口語、像在跟台下聊天）。這是講稿，播放時只有講者看得到。' : '- 給講者看的提醒寫「備註：…」，播放時只有講者看得到。',
+    '- 不要用表格、不要用其他 Markdown 語法，程式碼區塊外面不要放簡報內容。',
+  ];
+  const SHORT_EX = notes => ['=== 封面', '# 番茄鐘工作法', '## 用 25 分鐘，找回專注力', '學習策略工作坊 · 第 3 週', '=== 重點', '# 分心的三個常見原因', '- 手機通知一直跳出來', '- 任務太大，不知道從哪開始', '- 沒有休息，**越讀越累**', '=== 問答', '# 經典番茄鐘的專注時間是多久？', '- [ ] 10 分鐘', '- [x] 25 分鐘', '- [ ] 60 分鐘', '解答：專注 25 分鐘、休息 5 分鐘。', notes ? '備註：先請大家猜猜看，再公布答案。' : '', '=== 結尾', '# 謝謝聆聽'];
+
+  // o: 表單值；ctx: { theme, example }（example = 要照著做的範例內容，只有「照範例」模式用）
+  function aiPrompt(o, ctx) {
+    const theme = ctx && ctx.theme, follow = o.mode !== 'free' && ctx && ctx.example;
+    const ex = follow ? String(ctx.example).replace(/\r/g, '').split('\n').filter(l => o.notes || !/^\s*備註[：:]/.test(l)).join('\n').trim() : '';
+    const seq = follow ? seqOf(ex) : [];
+    const same = follow && (o.pages === 'same' || Number(o.pages) === seq.length);
+    const n = follow && same ? seq.length : (Number(o.pages) || 10);
+    const head = [
+      follow ? '請幫我寫一份網頁簡報的內容。我會附上一份範例，請照範例的格式和頁面安排，寫成我的主題。' : '請幫我寫一份網頁簡報的內容。',
       `主題：${o.topic.trim()}`,
       `對象：${o.aud.trim() || '（還沒決定）'}`,
-      `長度：大約 ${o.pages || 10} 頁${o.min ? `，報告時間約 ${o.min} 分鐘` : ''}`,
+      `長度：${n} 頁${o.min ? `，報告時間約 ${o.min} 分鐘` : ''}`,
       o.must && o.must.trim() ? `一定要提到：${o.must.trim()}` : '',
+      theme ? `簡報風格：${theme.name}（${theme.desc}）用字語氣請配合這個風格和對象。` : '',
+    ];
+    const plan = !follow ? [] : same ? [
+      `頁面安排：跟範例一樣共 ${seq.length} 頁，每一頁的版面依序是：${seqText(seq)}。請一頁對一頁，版面順序不要改。`,
+    ] : [
+      `頁面安排：範例是 ${seq.length} 頁（${seqText(seq)}），我要 ${n} 頁。`,
+      n > seq.length ? `請保留範例的版面順序，再多加 ${n - seq.length} 頁，加在最適合的段落裡（多用重點、步驟、左右、數字）。` : `請保留範例的版面順序，拿掉 ${seq.length - n} 頁比較不需要的（封面和結尾一定要留）。`,
+    ];
+    const lines = head.concat(plan, [
+      follow ? '範例只是格式和頁面安排的參考，內容要全部換成我的主題，不要沿用範例的文字、數字或資料。' : '',
       '如果有不清楚或缺少的資訊（例如對象、報告時間、一定要講的重點、資料來源），請先問我，確認後再寫。',
       '',
       '請完全照下面的格式輸出，整份放在一個程式碼區塊裡，我會把它貼回「網頁簡報範本庫」直接變成簡報：',
-      `- 每一頁用一行「=== 版面名稱」開頭。可用的版面：${E.TYPES.map(t => t.n).join('、')}。第一頁用封面，最後一頁用結尾。`,
-      '- 「# 」是這一頁的標題，「## 」是副標題（「左右」版面裡，「## 」是左欄和右欄的標題）。',
-      '- 「- 」是一個重點，一頁 3～5 點，每點 20 字以內。想強調的字用 **兩個星號** 包起來。',
-      '- 「數字」版面：「- 數字 | 說明」，例如「- 25 分 | 專心做一件事」，最多 4 個。數字要有可靠來源，不確定就寫「（請查證）」，並在最後一行寫「資料來源：…」。',
-      '- 「步驟」版面：「- 步驟名稱：一句說明」，3～5 步。',
-      '- 「引言」版面：「> 引言內容」，下一行「— 出處」。不要編造名人名言。',
-      '- 「圖文」版面：「![圖片說明](圖片網址)」，沒有網址就寫「![圖片說明]()」，我之後再放圖。',
-      '- 「問答」版面：「# 題目」，選項用「- [x] 正確答案」和「- [ ] 錯誤選項」，最後一行「解答：說明」。如果是投票、沒有標準答案，全部用「- [ ]」。',
-      o.notes ? '- 每一頁都加一行「備註：…」，寫講者在這一頁要說的話（2～3 句口語、像在跟台下聊天）。這是講稿，播放時只有講者看得到。' : '- 給講者看的提醒寫「備註：…」，播放時只有講者看得到。',
-      '- 不要用表格、不要用其他 Markdown 語法，程式碼區塊外面不要放簡報內容。',
+    ], RULES(o.notes), [
       '',
-      '格式範例：',
-      '=== 封面',
-      '# 番茄鐘工作法',
-      '## 用 25 分鐘，找回專注力',
-      '學習策略工作坊 · 第 3 週',
-      '=== 重點',
-      '# 分心的三個常見原因',
-      '- 手機通知一直跳出來',
-      '- 任務太大，不知道從哪開始',
-      '- 沒有休息，**越讀越累**',
-      '=== 問答',
-      '# 經典番茄鐘的專注時間是多久？',
-      '- [ ] 10 分鐘',
-      '- [x] 25 分鐘',
-      '- [ ] 60 分鐘',
-      '解答：專注 25 分鐘、休息 5 分鐘。',
-      o.notes ? '備註：先請大家猜猜看，再公布答案。' : '',
-      '=== 結尾',
-      '# 謝謝聆聽',
-    ];
+      follow ? '範例（照這個格式和頁面順序寫）：' : '格式範例：',
+    ], follow ? ['```', ex, '```'] : SHORT_EX(o.notes));
     return lines.filter((l, k) => l !== '' || lines[k - 1] !== '').join('\n');
+  }
+
+  // 貼回後格式有問題：請 AI 修正
+  function fixPrompt(w, want) {
+    return ['剛才的簡報內容貼回「網頁簡報範本庫」後，有這些地方要修正：']
+      .concat(w.map(x => '- ' + x), want ? [`- 頁數要是 ${want} 頁，照原本指令的頁面安排補上或刪減`] : [], [want ? '其他已經寫好的內容盡量保留。' : '其他內容不要改。', '請把修正後的完整內容，整份重新放在一個程式碼區塊裡輸出。']).join('\n');
   }
 
   /* 樣式與播放設定面板 */
@@ -324,7 +338,8 @@
     d.cfg = cfg;
     store.set('wst-draft', d);
     let theme = byId(d.theme);
-    const ai = Object.assign({ topic: '', aud: '', pages: '10', min: '', must: '', notes: true }, store.get('wst-ai', isAi) || {});
+    const ai = Object.assign({ topic: '', aud: '', pages: 'same', min: '', must: '', notes: true, mode: 'tpl' }, store.get('wst-ai', isAi) || {});
+    if (!['tpl', 'mine', 'free'].includes(ai.mode)) ai.mode = 'tpl';
     const groups = TAGS.map(tag => `<optgroup label="${tag}">${THEMES.filter(t => t.tags[0] === tag).map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</optgroup>`).join('');
 
     view.innerHTML = `
@@ -341,13 +356,20 @@
     <details class="ai" id="aiBox"${isSample(d.src) ? ' open' : ''}>
       <summary>請 AI 幫你寫內容 <small>ChatGPT、Gemini 都可以</small></summary>
       <div class="in">
+        <div class="alab">AI 要怎麼安排頁面？</div>
+        <div class="amode" role="group" aria-label="AI 要怎麼安排頁面">
+          <button type="button" class="och" data-mode="tpl">照這套範本的頁面安排</button>
+          <button type="button" class="och" data-mode="mine">照我現在內容的頁面安排</button>
+          <button type="button" class="och" data-mode="free">讓 AI 自己安排頁面</button>
+        </div>
+        <p class="hint aseq" id="aSeq"></p>
         <label class="fld">主題（必填）<input id="aTopic" value="${esc(ai.topic)}" placeholder="例如：高血壓的居家量測"></label>
         <div class="f2">
           <label class="fld">對象<input id="aAud" value="${esc(ai.aud)}" placeholder="例如：社區長輩、國中生"></label>
           <label class="fld">一定要提到<input id="aMust" value="${esc(ai.must)}" placeholder="可以不填"></label>
         </div>
         <div class="f2">
-          <label class="fld">頁數<select id="aPages">${[6, 8, 10, 12, 15].map(n => `<option${String(n) === String(ai.pages) ? ' selected' : ''}>${n}</option>`).join('')}</select></label>
+          <label class="fld">頁數<select id="aPages"><option value="same">跟範例一樣</option>${[6, 8, 10, 12, 15].map(n => `<option>${n}</option>`).join('')}</select></label>
           <label class="fld">報告時間（分鐘）<input id="aMin" inputmode="numeric" value="${esc(ai.min)}" placeholder="可以不填"></label>
         </div>
         <label class="ck"><input type="checkbox" id="aNotes"${ai.notes !== false ? ' checked' : ''}> 也請 AI 寫每一頁的講稿 <small>講者模式和手機遙控上看得到，台下看不到</small></label>
@@ -356,7 +378,7 @@
           <button class="btn" id="aGem">${ICON.copy}複製並打開 Gemini</button>
           <button class="btn ghost" id="aCopy">只複製</button>
         </div>
-        <p class="hint">AI 寫好後，按它程式碼區塊右上角的「複製」，再到下面按「清空並貼上」。AI 若先問你問題，回答完它才會開始寫。</p>
+        <p class="hint">AI 寫好後，按它程式碼區塊右上角的「複製」，再到下面按「清空並貼上」。AI 若先問你問題，回答完它才會開始寫。貼回來如果頁數不對或格式有問題，下面會出現「複製修正指令給 AI」。</p>
       </div>
     </details>
     <div class="pane">
@@ -364,6 +386,7 @@
       <textarea id="src" spellcheck="false" aria-label="簡報內容">${esc(d.src)}</textarea>
       <div class="ins"><span>加一頁：</span>${E.TYPES.map(t => `<button type="button" data-k="${t.k}" title="${esc(t.tip)}">${t.n}</button>`).join('')}</div>
       <div class="warn" id="eWarn"></div>
+      <div class="afix" id="eFix" hidden><span id="eFixMsg"></span><button type="button" class="btn sm" id="eFixBtn">${ICON.copy}複製修正指令給 AI</button></div>
       <div class="okline" id="eOk"></div>
     </div>
   </div>
@@ -381,7 +404,7 @@
 </div>`;
     const ta = $('#src'), prev = $('#prev'), sel = $('#eTheme');
     sel.value = theme.id;
-    let ready = false, at = 0, t1 = 0;
+    let ready = false, at = 0, t1 = 0, fromAI = false, wantN = 0, fixList = [], fixPage = 0;
     if (note) toast(note, 4800);
 
     const slideAt = () => {
@@ -394,6 +417,12 @@
       const sl = E.parse(ta.value), w = E.warnings(sl);
       $('#eWarn').innerHTML = w.length ? `<ul>${w.slice(0, 6).map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
       $('#eOk').textContent = !w.length && sl.length ? `共 ${sl.length} 頁，格式都正確` : '';
+      const pm = fromAI && wantN && sl.length && sl.length !== wantN ? `AI 寫了 ${sl.length} 頁，你要的是 ${wantN} 頁。` : '';
+      const show = !!(fromAI && sl.length && (w.length || pm));
+      fixList = w.slice(); fixPage = pm ? wantN : 0;
+      $('#eFix').hidden = !show;
+      $('#eFixMsg').textContent = show ? (pm || '貼回的內容有格式問題。') + '可以請 AI 修正：' : '';
+      drawMode();
     };
     const full = () => { ready = false; prev.srcdoc = E.build(theme, ta.value, Object.assign(deckOpt(cfg), { start: at })); };
     const swap = () => {
@@ -433,11 +462,11 @@
       let txt = '';
       try { txt = navigator.clipboard && navigator.clipboard.readText ? await navigator.clipboard.readText() : ''; } catch (e) { txt = ''; }
       if (txt && /={3,}/.test(txt)) {
-        ta.value = txt.replace(/^\s*```[^\n]*\n?/gm, '').trim(); at = 0; save(); full(); check();
-        toast('已貼上 AI 寫的內容');
+        ta.value = txt.replace(/^\s*```[^\n]*\n?/gm, '').trim(); at = 0; fromAI = true; save(); full(); check();
+        toast($('#eFix').hidden ? `已貼上 AI 寫的內容，共 ${E.parse(ta.value).length} 頁` : '已貼上，有幾個地方要修正，看編輯區下面的提示', 4000);
       } else {
         if (!isSample(ta.value) && ta.value.trim() && !confirm('要清空現在的內容，再自己貼上嗎？')) return;
-        ta.value = ''; ta.focus(); save(); check();
+        ta.value = ''; ta.focus(); fromAI = true; save(); check();
         toast(txt ? '剪貼簿裡的內容不是簡報格式，請手動貼上（⌘V 或 Ctrl+V）' : '已清空，請按 ⌘V 或 Ctrl+V 貼上 AI 寫的內容', 4000);
       }
     };
@@ -447,14 +476,34 @@
     $('#eDl').onclick = () => download(theme, ta.value, cfg);
     $('#ePdf').onclick = () => openDeck(theme, ta.value, '#print', cfg);
 
-    // AI 小幫手
-    const aiVals = () => ({ topic: $('#aTopic').value, aud: $('#aAud').value, pages: $('#aPages').value, min: $('#aMin').value.replace(/\D/g, ''), must: $('#aMust').value, notes: $('#aNotes').checked });
+    // AI 小幫手：照範本／照我的內容／AI 自己安排
+    let mode = ai.mode;
+    const mineOk = () => !isSample(ta.value) && E.parse(ta.value).length >= 2;
+    const exampleSrc = () => mode === 'mine' ? ta.value : mode === 'tpl' ? SAMPLES[theme.sample] : '';
+    const aiVals = () => ({ topic: $('#aTopic').value, aud: $('#aAud').value, pages: $('#aPages').value, min: $('#aMin').value.replace(/\D/g, ''), must: $('#aMust').value, notes: $('#aNotes').checked, mode });
+    const aiCtx = () => ({ theme, example: exampleSrc() });
+    const drawMode = () => {
+      if (mode === 'mine' && !mineOk()) mode = 'tpl';
+      $$('.amode .och').forEach(b => { b.setAttribute('aria-pressed', b.dataset.mode === mode); if (b.dataset.mode === 'mine') b.hidden = !mineOk(); });
+      const ps = $('#aPages'), so = ps.querySelector('[value=same]');
+      so.hidden = so.disabled = mode === 'free';
+      if (mode === 'free' && ps.value === 'same') ps.value = '10';
+      if (mode === 'free') { $('#aSeq').textContent = 'AI 會依主題自己決定用哪些版面、排成幾頁。'; return; }
+      const seq = seqOf(exampleSrc());
+      so.textContent = `跟範例一樣（${seq.length} 頁）`;
+      $('#aSeq').innerHTML = `${mode === 'tpl' ? `會把「${esc(theme.name)}」的範例內容一起給 AI` : '會把你現在編輯區的內容當範例給 AI'}，照同樣的頁面安排寫你的主題：<span class="seq">${seq.map(esc).join(' → ')}</span>`;
+    };
+    $('#aPages').value = [...$('#aPages').options].some(x => x.value === String(ai.pages)) ? String(ai.pages) : 'same';
+    drawMode();
+    $('.amode').addEventListener('click', e => { const b = e.target.closest('[data-mode]'); if (!b) return; mode = b.dataset.mode; drawMode(); store.set('wst-ai', aiVals()); });
     ['aTopic', 'aAud', 'aPages', 'aMin', 'aMust', 'aNotes'].forEach(id => { const x = $('#' + id); x.addEventListener('input', () => store.set('wst-ai', aiVals())); x.addEventListener('change', () => store.set('wst-ai', aiVals())); });
+    sel.addEventListener('change', drawMode);
     const goAI = url => {
       const o = aiVals();
       if (!o.topic.trim()) { toast('先寫上簡報主題'); $('#aTopic').focus(); return; }
       store.set('wst-ai', o);
-      const ok = copyNow(aiPrompt(o));
+      wantN = o.mode !== 'free' && o.pages === 'same' ? seqOf(exampleSrc()).length : Number(o.pages) || 10;
+      const ok = copyNow(aiPrompt(o, aiCtx()));
       if (url) {
         window.open(url, '_blank', 'noopener');
         toast(ok ? '已複製指令，到新分頁的對話框貼上（⌘V 或 Ctrl+V）送出' : '沒複製成功，請按「只複製」再試一次', 4200);
@@ -463,7 +512,9 @@
     $('#aGPT').onclick = () => goAI('https://chatgpt.com/');
     $('#aGem').onclick = () => goAI('https://gemini.google.com/app');
     $('#aCopy').onclick = () => goAI('');
-    window.WST_APP = { aiPrompt: () => aiPrompt(aiVals()) };
+    $('#eFixBtn').onclick = () => toast(copyNow(fixPrompt(fixList, fixPage)) ? '已複製修正指令，回到 AI 的對話貼上送出' : '沒複製成功，請再試一次', 4200);
+    if (openAI) { openAI = false; $('#aiBox').open = true; mode = 'tpl'; drawMode(); store.set('wst-ai', aiVals()); setTimeout(() => $('#aTopic').focus(), 60); }
+    window.WST_APP = { aiPrompt: () => aiPrompt(aiVals(), aiCtx()), fixPrompt: () => fixPrompt(fixList, fixPage), wantN: () => wantN };
 
     full(); check();
   }
@@ -485,6 +536,17 @@
     <div><b>步驟 2</b>在編輯器改成你的內容。也可以填主題，請 ChatGPT 或 Gemini 照格式幫你寫，再貼回來。</div>
     <div><b>步驟 3</b>按「全螢幕播放」直接報告，或「下載 HTML」帶著走、「存成 PDF」交作業。</div>
   </div>
+  <h2>請 AI 幫你寫</h2>
+  <p style="color:var(--mute);margin:0 0 10px">在編輯器上方的「請 AI 幫你寫內容」填主題，選一種頁面安排，按「複製並打開 ChatGPT」或 Gemini，到對話框貼上送出。也可以在範本頁按「請 AI 照這套範本寫」直接開始。</p>
+  <table class="tbl">
+    <thead><tr><th>頁面安排</th><th>AI 會怎麼做</th><th>適合</th></tr></thead>
+    <tbody>
+      <tr><td>照這套範本的頁面安排</td><td>把這套範本的整份範例一起給 AI，照同樣的版面順序寫你的主題。頁數可以「跟範例一樣」，或選幾頁讓 AI 增減。</td><td>想要跟示範一樣完整、有目錄、測驗、結尾</td></tr>
+      <tr><td>照我現在內容的頁面安排</td><td>把你編輯區現在的內容當範例，例如你上次做好的一份，AI 照同樣的頁數和版面寫新主題。</td><td>同一系列的課，每次結構都一樣</td></tr>
+      <tr><td>讓 AI 自己安排頁面</td><td>只給 AI 格式規則，由它依主題決定用哪些版面。</td><td>主題特別、不想被範本限制</td></tr>
+    </tbody>
+  </table>
+  <p class="hint" style="margin-top:10px">AI 寫好後，複製它的程式碼區塊，回來按「清空並貼上」。如果頁數不對或格式有問題，編輯區下面會出現「複製修正指令給 AI」，貼回同一個對話就能請它改好。</p>
   <h2>內容怎麼寫</h2>
   <p style="color:var(--mute);margin:0 0 12px">每一頁用一行 <code>=== 版面名稱</code> 開頭。<code>#</code> 是標題、<code>##</code> 是副標題、<code>-</code> 是一個重點，<code>**字**</code> 會變成強調色。</p>
   <table class="tbl">

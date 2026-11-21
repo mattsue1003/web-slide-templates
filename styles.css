@@ -202,3 +202,12 @@ input[type=color]{width:44px;height:32px;border:1px solid var(--line);border-rad
 .ck input{width:18px;height:18px;accent-color:var(--ac)}
 .ck small{flex-basis:100%;padding-left:26px;color:var(--mute);font-size:13px;margin-top:-4px}
 @media (max-width:640px){.orow{grid-template-columns:1fr;gap:4px}.ol{padding-top:0}}
+/* AI 頁面安排模式、修正提示 */
+.amode{display:flex;flex-wrap:wrap;gap:6px}
+.amode .och{padding:7px 12px}
+.amode .och[hidden]{display:none}
+.aseq{margin:-2px 0 0}
+.aseq .seq{display:block;margin-top:4px;color:var(--ink);font-size:13px;line-height:1.7}
+.afix{margin-top:10px;display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;background:#EEF4FB;border:1px solid #C9DAEE;border-radius:10px;padding:10px 14px;font-size:14px;color:#1F3F66}
+.afix[hidden]{display:none}
+.alab{font-size:14px;color:var(--mute);margin-bottom:-4px}
