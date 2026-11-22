@@ -458,6 +458,22 @@ body.ov .r{opacity:1;transform:none;transition:none}
 [data-tr=flip] .slide.past{transform:rotateY(-32deg);transform-origin:right center}
 [data-tr=blur] .slide{filter:blur(16px);transform:scale(1.03)}
 [data-tr=blur] .slide.on{filter:none}
+/* 換頁效果要一眼看得出來：位移、縮放、角度都加大，舊頁往反方向離開 */
+.slide{transition:opacity calc(.5s*var(--sp,1)) ease,transform calc(.8s*var(--sp,1)) cubic-bezier(.2,.75,.2,1),filter calc(.7s*var(--sp,1)) ease,visibility 0s linear calc(.85s*var(--sp,1))}
+.slide.on{transition:opacity calc(.5s*var(--sp,1)) ease,transform calc(.8s*var(--sp,1)) cubic-bezier(.2,.75,.2,1),filter calc(.7s*var(--sp,1)) ease,visibility 0s}
+[data-tr=fade] .slide{transition:opacity calc(.45s*var(--sp,1)) ease,visibility 0s linear calc(.5s*var(--sp,1))}
+[data-tr=fade] .slide.on{transition:opacity calc(.6s*var(--sp,1)) ease calc(.4s*var(--sp,1)),visibility 0s}
+[data-tr=rise] .slide{transform:translateY(240px)}
+[data-tr=rise] .slide.past{transform:translateY(-160px)}
+[data-tr=slide] .slide{transform:translateX(100%);opacity:1}
+[data-tr=slide] .slide.past{transform:translateX(-100%)}
+[data-tr=zoom] .slide{transform:scale(.72)}
+[data-tr=zoom] .slide.past{transform:scale(1.3)}
+[data-tr=flip] .stage{perspective:1800px}
+[data-tr=flip] .slide{transform:rotateY(88deg)}
+[data-tr=flip] .slide.past{transform:rotateY(-88deg)}
+[data-tr=blur] .slide{filter:blur(34px);transform:scale(1.12)}
+[data-tr=blur] .slide.past{transform:scale(.92)}
 [data-tr=none] .slide{transition:none!important}
 .r{transition:opacity calc(.6s*var(--sp,1)) ease,transform calc(.7s*var(--sp,1)) cubic-bezier(.2,.7,.2,1);transition-delay:calc((var(--i,0)*85ms + 140ms)*var(--sp,1))}
 [data-anim=fade] .r{transform:none}

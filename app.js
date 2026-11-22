@@ -535,6 +535,7 @@
       <span class="pg" id="pPg">1 / 1</span>
       <button class="btn sm" id="pNext" aria-label="下一頁">›</button>
       <span class="pdemo" id="pDemo">游標在哪一頁，預覽就跳到哪一頁</span>
+      <button class="btn sm" id="pReplay" hidden>再看一次</button>
     </div>
     <p class="hint phint">格式不熟？看 <a href="#guide">使用說明</a>。內容和設定會自動存在這台電腦的瀏覽器裡。</p>
   </div>
@@ -583,12 +584,16 @@
       footer: ['bullets', 'two', 'stats'], footText: ['bullets', 'two', 'stats'], anim: ['bullets', 'steps', 'stats'], step: ['bullets', 'agenda', 'steps'],
     };
     const findType = types => { const sl = E.parse(ta.value); const cur = sl[at]; if (cur && types.includes(cur.type)) return at; for (const t of types) { const j = sl.findIndex(x => x.type === t); if (j >= 0) return j; } return at; };
+    let replay = null; const demoT = [0, 0];
     const demo = (k, val) => {
       const N = E.parse(ta.value).length, name = optName(k, val);
       let start = at, then = null, msg = name ? `預覽：${name}` : '預覽已更新';
       if (k === 'tr' || k === 'speed') {
         const j = Math.min(at, Math.max(0, N - 2)); start = j;
-        then = () => send(prev, { go: j + 1 }); msg += `（第 ${j + 1} → ${j + 2} 頁）`;
+        // 來回換三次，才看得清楚：下一頁 → 回來 → 再下一頁
+        const gap = 1500 * ({ fast: .7, slow: 1.5 }[cfg.speed] || 1);
+        then = () => { clearTimeout(demoT[0]); clearTimeout(demoT[1]); send(prev, { go: j + 1 }); demoT[0] = setTimeout(() => send(prev, { go: j }), gap); demoT[1] = setTimeout(() => send(prev, { go: j + 1 }), gap * 2); };
+        msg += `（第 ${j + 1} ⇄ ${j + 2} 頁，來回示範）`;
       } else if (k === 'anim' || k === 'step') {
         const j = findType(DEMO[k]); start = j > 0 ? j - 1 : Math.min(1, N - 1);
         then = () => { send(prev, { go: j, f: 0 }); if (cfg.step) { setTimeout(() => send(prev, { key: 'ArrowRight' }), 700); setTimeout(() => send(prev, { key: 'ArrowRight' }), 1400); } };
@@ -597,8 +602,8 @@
       else if (k === 'toc') { if (on(cfg, 'toc')) { then = () => send(prev, { key: 't' }); msg += '（按 T 或右下角圖示打開）'; } }
       else if (k === 'nav') msg += cfg.nav ? '（在預覽裡捲動看看）' : '';
       else if (['snap', 'auto', 'remote'].includes(k)) msg += '：播放時才看得出來';
-      at = start; full(start); onReady = then;
-      $('#pDemo').textContent = msg; $('#pDemo').classList.add('on');
+      at = start; full(start); onReady = then ? () => setTimeout(then, 450) : null; replay = then;
+      $('#pDemo').textContent = msg; $('#pDemo').classList.add('on'); $('#pReplay').hidden = !(then && (k === 'tr' || k === 'speed'));
       const r = prev.getBoundingClientRect();
       if (r.top < 0 || r.bottom > innerHeight) prev.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     };
@@ -753,6 +758,7 @@
     });
     loadImgs().then(() => { if (/!\[[^\]]*\]\(img:/.test(ta.value)) full(); imgSig = ''; drawImgs(); });
 
+    $('#pReplay').onclick = () => { if (replay) replay(); };
     $('#pPrev').onclick = () => send(prev, { key: 'ArrowLeft' });
     $('#pNext').onclick = () => send(prev, { key: 'ArrowRight' });
     $('#ePlay').onclick = () => openDeck(theme, ta.value, '', cfg);
