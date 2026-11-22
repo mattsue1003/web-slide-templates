@@ -258,7 +258,7 @@ h2{font-size:52px;margin-bottom:44px;max-width:1080px}
 .col ul{list-style:none;display:grid;gap:16px}
 .col li{font-size:27px;line-height:1.5;padding-left:28px;position:relative}
 .col li::before{content:'';position:absolute;left:0;top:.62em;width:10px;height:10px;border-radius:50%;background:currentColor;opacity:.38}
-.stats{display:grid;grid-template-columns:repeat(var(--c),1fr);gap:32px}
+.stats{display:grid;grid-template-columns:repeat(var(--c),minmax(0,1fr));gap:32px}
 .st{background:var(--card);border-radius:var(--rad);padding:40px 36px;border:var(--cb,0px) solid var(--line)}
 .st b{display:block;font-family:var(--nf,var(--hf));font-size:72px;line-height:1.08;color:var(--ac);font-weight:800;margin-bottom:16px;letter-spacing:-.01em}
 .st b.lg{font-size:54px;white-space:nowrap}
@@ -622,13 +622,26 @@ body.pres .pside{display:flex;position:fixed;top:0;right:0;bottom:0;width:36%;pa
         var kids = [].filter.call(s.children, function (x) { return !/\b(deco|pf)\b/.test(x.className); });
         kids.forEach(function (x) { x.style.zoom = ''; x._z = parseFloat(getComputedStyle(x).zoom) || 1; });
         s.classList.add('measure');
+        // 大數字太長：先把那個數字縮到卡片放得下（最小 30%），卡片才不會被撐到畫面外
+        [].forEach.call(s.querySelectorAll('.st b'), function (b) {
+          b.style.fontSize = '';
+          var base = parseFloat(getComputedStyle(b).fontSize), f = base;
+          for (var k = 0; k < 4; k++) {
+            var w = b.clientWidth, sw = b.scrollWidth;
+            if (!(w > 0 && sw > w + 1) || f <= base * .3) break;
+            f = Math.max(base * .3, Math.floor(f * w / sw * .97)); b.style.fontSize = f + 'px';
+          }
+        });
+        // 左右超出畫面也算放不下
+        var wide = function () { return kids.some(function (x) { return x.clientWidth > 0 && x.scrollWidth > x.clientWidth + 2; }); };
         var jc = s.style.justifyContent; s.style.justifyContent = 'flex-start';
         var avail = s.clientHeight, z = 1;
-        if (avail > 0 && s.scrollHeight > avail + 2) {
-          z = Math.max(.5, Math.floor(avail / s.scrollHeight * 100) / 100);
+        if (avail > 0 && (s.scrollHeight > avail + 2 || wide())) {
+          z = Math.max(.5, Math.min(1, Math.floor(avail / s.scrollHeight * 100) / 100));
+          if (z === 1) z = .96;
           while (true) {
             kids.forEach(function (x) { x.style.zoom = x._z * z; });
-            if (s.scrollHeight <= avail + 2 || z <= .5) break;
+            if ((s.scrollHeight <= avail + 2 && !wide()) || z <= .5) break;
             z = Math.max(.5, Math.round((z - .04) * 100) / 100);
           }
         }

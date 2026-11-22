@@ -298,7 +298,7 @@
       `對象：${o.aud.trim() || '（還沒決定）'}`,
       `長度：${n} 頁${o.min ? `，報告時間約 ${o.min} 分鐘` : ''}`,
       TONES.includes(o.tone) ? `語氣：${o.tone}` : '',
-      ...ideaLines(o),
+      ...(content && !(o.must || '').trim() ? [] : ideaLines(o)),
       content ? (seqOf(content).length === n ? '簡報內容請照下面這份來做，一頁對一頁；' : `簡報內容請照下面這份來做。這份有 ${seqOf(content).length} 頁，請調整成 ${n} 頁（${n > seqOf(content).length ? '依主題補充內容' : '合併或刪減比較次要的頁'}）；`) + '文字可以潤飾，但不要改掉重點、數字和資料來源。「=== 」開頭是每一頁的版面，「備註：」是講稿：' :'內容請你依主題規劃，數字和資料要有可靠來源，不確定就標「（請查證）」。',
       content ? '```\n' + content.replace(/^(\s*!\[.*?\]\().*?(\))/gm, '$1$2') + '\n```' : '',
       '',
@@ -352,7 +352,7 @@
     document.head.appendChild(l);
   }
   const SECS = ['配色', '字體', '排版', '元素', '動畫', '播放'];
-  const SEC_TIP = { 配色: '只換顏色，版面和裝飾不變', 字體: '標題和內文用的字', 排版: '對齊、字的大小、留白、頁碼', 元素: '項目符號、卡片、標題的樣子', 動畫: '點一個，右邊的預覽會示範一次', 播放: '播放時怎麼操作' };
+  const SEC_TIP = { 配色: '只換顏色，版面和裝飾不變', 字體: '標題和內文用的字', 排版: '對齊、字的大小、留白、頁碼', 元素: '項目符號、卡片、標題的樣子', 動畫: '小圖會一直示範效果；點一個，右邊的預覽也會示範一次', 播放: '播放時怎麼操作' };
   const BUL = { dot: '●', square: '■', check: '✓', arrow: '→', dash: '–', none: '' };
   // 一個選項的小示意圖；沒有就回傳空字串（只顯示文字）
   function vis(o, it, theme) {
@@ -366,6 +366,9 @@
     if (k === 'valign') return `<span class="mini va va-${v || 'mid'}"><s></s><s></s></span>`;
     if (k === 'size') return `<span class="mini sz" style="font-size:${{ s: 12, '': 15, l: 19, xl: 24 }[v]}px">字</span>`;
     if (k === 'space') return `<span class="mini spc spc-${v || 'std'}"><s></s><s></s><s></s></span>`;
+    if (k === 'tr') return `<span class="mini trn trn-${v || theme.tr || 'fade'}"><i></i><i></i></span>`;
+    if (k === 'anim') return `<span class="mini ani ani-${v || 'rise'}"><s></s><s></s><s></s></span>`;
+    if (k === 'speed') return `<span class="mini spd spd-${v || 'std'}"><i></i></span>`;
     return '';
   }
   function optHtml(o, cfg, theme) {
@@ -459,6 +462,7 @@
   <button class="btn dark" id="ePlay">${ICON.play}全螢幕播放</button>
   <button class="btn" id="eDl">${ICON.dl}下載 HTML</button>
   <button class="btn" id="ePdf">${ICON.pdf}存成 PDF</button>
+  <button class="btn" id="eAI" title="複製一段指令：你的內容＋你挑的風格，貼給 ChatGPT 或 Gemini，請它做成一個 HTML 簡報">${ICON.copy}複製給 AI 做成網頁</button>
 </div>
 <div class="ed">
   <div class="ed-l">
@@ -802,7 +806,18 @@
     $('#eFixBtn').onclick = () => toast(copyNow(fixPrompt(fixList, fixPage)) ? '已複製修正指令，回到 AI 的對話貼上送出' : '沒複製成功，請再試一次', 4200);
     if (openAI) { openAI = false; showStep('content'); $('#aiBox').open = true; mode = 'free'; drawMode(); store.set('wst-ai', aiVals()); setTimeout(() => $('#aTopic').focus(), 60); }
     $('#aHtmlOpen').onclick = () => htmlViewer();
-    window.WST_APP = { step: () => stepNow, theme: () => theme.id, aiPrompt: () => mode === 'html' ? htmlPrompt(aiVals(), aiCtx()) : aiPrompt(aiVals(), aiCtx()), fixPrompt: () => fixPrompt(fixList, fixPage), wantN: () => wantN, imgPrompt: j => { const x = slots().find(y => y.j === j); return x ? imgPrompt(x, theme, E.titleOf(E.parse(ta.value), theme.name)) : ''; }, setImage: (j, f) => useFile(f, j) };
+    // 不靠這裡的預覽：把內容和風格包成一段指令，交給 AI 做成完整的 HTML 簡報
+    const handoff = () => {
+      const sl = E.parse(ta.value), o = aiVals();
+      o.mode = 'html'; o.pages = String(sl.length || 10);
+      if (!o.topic.trim()) o.topic = E.titleOf(sl, theme.name);
+      return htmlPrompt(o, { theme, style: effStyle(), content: sl.length ? ta.value : '' });
+    };
+    $('#eAI').onclick = () => {
+      if (!E.parse(ta.value).length) { toast('先在「1 內容」寫好簡報內容'); return; }
+      toast(copyNow(handoff()) ? `已複製：你的 ${E.parse(ta.value).length} 頁內容＋風格「${styleName()}」。貼到 ChatGPT 或 Gemini，它會做成一個 HTML 簡報` : '沒複製成功，請再試一次', 5200);
+    };
+    window.WST_APP = { handoff, step: () => stepNow, theme: () => theme.id, aiPrompt: () => mode === 'html' ? htmlPrompt(aiVals(), aiCtx()) : aiPrompt(aiVals(), aiCtx()), fixPrompt: () => fixPrompt(fixList, fixPage), wantN: () => wantN, imgPrompt: j => { const x = slots().find(y => y.j === j); return x ? imgPrompt(x, theme, E.titleOf(E.parse(ta.value), theme.name)) : ''; }, setImage: (j, f) => useFile(f, j) };
 
     full(); check();
   }

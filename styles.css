@@ -333,6 +333,34 @@ input[type=color]{width:44px;height:32px;border:1px solid var(--line);border-rad
 .mini.spc{flex-direction:column}
 .spc s{width:40px}
 .spc-tight{gap:3px}.spc-std{gap:6px}.spc-loose{gap:10px}
+/* 動畫選項：小圖一直示範（A 頁換到 B 頁、三行字進場、速度） */
+.mini.trn{position:relative;perspective:140px}
+.trn i{position:absolute;inset:6px 9px;border-radius:3px;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.14)}
+.trn i::before{content:'';position:absolute;left:5px;top:6px;width:55%;height:4px;border-radius:2px;background:#8B857B;box-shadow:0 8px 0 #C9C3B8}
+.trn i+i{background:var(--pa);animation:2.8s infinite both}
+.trn i+i::before{background:#fff;box-shadow:0 8px 0 rgba(255,255,255,.6)}
+.trn-fade i+i{animation-name:t-fade}.trn-rise i+i{animation-name:t-rise}.trn-slide i+i{animation-name:t-slide}.trn-zoom i+i{animation-name:t-zoom}
+.trn-flip i+i{animation-name:t-flip;transform-origin:0 50%}.trn-blur i+i{animation-name:t-blur}.trn-none i+i{animation-name:t-none}
+@keyframes t-fade{0%,14%{opacity:0}44%,88%{opacity:1}100%{opacity:0}}
+@keyframes t-rise{0%,14%{opacity:0;transform:translateY(60%)}44%,88%{opacity:1;transform:none}100%{opacity:0;transform:none}}
+@keyframes t-slide{0%,14%{opacity:1;transform:translateX(125%)}44%,88%{opacity:1;transform:none}100%{opacity:0;transform:none}}
+@keyframes t-zoom{0%,14%{opacity:0;transform:scale(.45)}44%,88%{opacity:1;transform:none}100%{opacity:0;transform:none}}
+@keyframes t-flip{0%,14%{opacity:1;transform:rotateY(-92deg)}44%,88%{opacity:1;transform:none}100%{opacity:0;transform:none}}
+@keyframes t-blur{0%,14%{opacity:0;filter:blur(7px)}44%,88%{opacity:1;filter:none}100%{opacity:0;filter:none}}
+@keyframes t-none{0%,29%{opacity:0}29.1%,88%{opacity:1}100%{opacity:0}}
+.mini.ani{flex-direction:column;align-items:flex-start;gap:5px;padding:0 13px}
+.ani s{width:38px;opacity:.5;animation:2.8s infinite both}
+.ani s:nth-child(2){width:28px;animation-delay:.22s}.ani s:nth-child(3){width:33px;animation-delay:.44s}
+.ani-rise s{animation-name:a-rise}.ani-fade s{animation-name:a-fade}.ani-left s{animation-name:a-left}.ani-pop s{animation-name:a-pop}.ani-drop s{animation-name:a-drop}
+@keyframes a-rise{0%,8%{opacity:0;transform:translateY(9px)}26%,84%{opacity:.5;transform:none}96%,100%{opacity:0;transform:none}}
+@keyframes a-fade{0%,8%{opacity:0}30%,84%{opacity:.5}96%,100%{opacity:0}}
+@keyframes a-left{0%,8%{opacity:0;transform:translateX(-18px)}26%,84%{opacity:.5;transform:none}96%,100%{opacity:0;transform:none}}
+@keyframes a-pop{0%,8%{opacity:0;transform:scale(.2)}20%{opacity:.5;transform:scale(1.25)}28%,84%{opacity:.5;transform:none}96%,100%{opacity:0;transform:none}}
+@keyframes a-drop{0%,8%{opacity:0;transform:translateY(-12px)}26%,84%{opacity:.5;transform:none}96%,100%{opacity:0;transform:none}}
+.spd i{width:9px;height:9px;border-radius:50%;background:var(--pa);animation:spd 1.3s ease-in-out infinite alternate}
+.spd-fast i{animation-duration:.55s}.spd-slow i{animation-duration:2.6s}
+@keyframes spd{from{transform:translateX(-22px)}to{transform:translateX(22px)}}
+@media (prefers-reduced-motion:reduce){.mini i,.mini s{animation-play-state:paused;animation-delay:-1.4s!important}.och:hover .mini i,.och:hover .mini s,.och:focus-visible .mini i,.och:focus-visible .mini s{animation-play-state:running}}
 @media (max-width:640px){
   .amode{grid-template-columns:1fr}
   .steps small,.steps-end{display:none}
